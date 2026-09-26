@@ -1,0 +1,33 @@
+# SearXNG settings layered over the upstream defaults.
+# The secret comes from $SEARXNG_SECRET (generated into .env by searxng.sh).
+use_default_settings: true
+
+general:
+  instance_name: "SearXNG"
+
+server:
+  # Reached only over loopback / the tailnet, so the bot limiter stays off;
+  # it would otherwise throttle agent traffic.
+  limiter: false
+  image_proxy: false
+  public_instance: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  # json is what API clients (dsh, scripts) use.
+  formats:
+    - html
+    - json
+
+valkey:
+  url: valkey://valkey:6379/0
+
+outgoing:
+  request_timeout: 5.0
+  max_request_timeout: 15.0
+
+engines:
+  # Returns CAPTCHAs to this IP on every query; it only adds latency.
+  - name: duckduckgo
+    disabled: true

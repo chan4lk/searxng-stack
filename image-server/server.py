@@ -58,12 +58,16 @@ MEMORY_LIMIT_GB = float(os.environ.get("IMAGE_MEMORY_LIMIT_GB", "32"))
 CACHE_LIMIT_GB = float(os.environ.get("IMAGE_CACHE_LIMIT_GB", "2"))
 HEADROOM_GB = float(os.environ.get("IMAGE_MEMORY_HEADROOM_GB", "4"))
 AUTO_DOWNGRADE = os.environ.get("IMAGE_AUTO_DOWNGRADE", "1") == "1"
-# Conservative starting estimates of peak GB per (variant, quantize); replaced
-# by the largest peak actually observed once a variant has run.
+# Conservative starting estimates of peak GB per (variant, quantize) for a
+# ~1024x1024 job. Replaced by measured peaks as jobs run (see expected_peak_gb).
 PEAK_ESTIMATE_GB = {
-    ("edit", None): 46, ("edit", 8): 28, ("edit", 4): 22,
-    ("img2img", None): 46, ("img2img", 8): 26, ("img2img", 4): 20,
+    ("edit", None): 46, ("edit", 8): 30, ("edit", 4): 23,
+    ("img2img", None): 46, ("img2img", 8): 34, ("img2img", 4): 26,
 }
+# Peak memory grows with the pixels a job processes (output plus references),
+# so peaks are recorded per workload bucket, in megapixels (upper bounds).
+WORKLOAD_BUCKETS_MP = [0.3, 0.7, 1.2, 2.5, 5.0, float("inf")]
+BUCKET_STEP_GB = 6.0  # added per bucket above the largest measured one
 MAX_REFERENCES = 10
 MAX_INPUT_BYTES = 25 * 1024 * 1024
 # Wording the mflux docs use to ask Qwen-Image 2.1 for a transparent (RGBA) result.
@@ -86,10 +90,44 @@ class MemoryGuardError(RuntimeError):
     """Refused because the Mac doesn't have the memory for this request right now."""
 
 
-def available_gb() -> float:
+def memory_breakdown() -> dict[str, float]:
+    """Machine-wide memory the way macOS accounts for it, in GB.
+
+    Disk cache (file-backed pages, e.g. a local LLM's memory-mapped weights) is
+    reclaimable: macOS drops it and re-reads from disk when needed. psutil's
+    free+inactive treats recently used cache as taken, which made the guard
+    refuse jobs right after the LLM had answered.
+    """
+    import subprocess
+
     import psutil
 
-    return psutil.virtual_memory().available / GB
+    total = psutil.virtual_memory().total
+    try:
+        # Absolute path: the launchd service's PATH doesn't include every system dir.
+        out = subprocess.run(["/usr/bin/vm_stat"], capture_output=True, text=True, check=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError) as error:
+        log.warning("vm_stat unavailable (%s); falling back to psutil free+inactive", error)
+        v = psutil.virtual_memory()
+        return {"total": v.total / GB, "available": v.available / GB}
+    page = int(out.split("page size of ")[1].split()[0])
+    pages = {}
+    for line in out.splitlines()[1:]:
+        key, _, value = line.partition(":")
+        if value.strip().rstrip(".").isdigit():
+            pages[key.strip()] = int(value.strip().rstrip(".")) * page / GB
+    app = pages.get("Anonymous pages", 0.0)
+    wired = pages.get("Pages wired down", 0.0)
+    compressed = pages.get("Pages occupied by compressor", 0.0)
+    purgeable = pages.get("Pages purgeable", 0.0)
+    total_gb = total / GB
+    available = min(total_gb, max(0.0, total_gb - app - wired - compressed + purgeable))
+    return {"total": total_gb, "available": available, "app": app, "wired": wired,
+            "compressed": compressed, "disk_cache": pages.get("File-backed pages", 0.0)}
+
+
+def available_gb() -> float:
+    return memory_breakdown()["available"]
 
 
 def configure_mlx_limits() -> None:
@@ -102,28 +140,67 @@ def configure_mlx_limits() -> None:
 PEAKS_FILE = Path(os.environ.get("IMAGE_PEAKS_FILE", Path.home() / ".image-server-peaks.json"))
 
 
-def load_peaks() -> dict[tuple[str, int | None], float]:
-    """Observed peaks survive restarts, so the guard never falls back to guesses once calibrated."""
+PeakKey = tuple[str, int | None, int]  # (variant, quantize, workload bucket index)
+
+
+def workload_bucket(megapixels: float) -> int:
+    return next(i for i, bound in enumerate(WORKLOAD_BUCKETS_MP) if megapixels <= bound)
+
+
+def bucket_label(i: int) -> str:
+    bound = WORKLOAD_BUCKETS_MP[i]
+    return f"<={bound:g}MP" if bound != float("inf") else f">{WORKLOAD_BUCKETS_MP[-2]:g}MP"
+
+
+def _qkey(q: int | None) -> str:
+    return "bf16" if q is None else str(q)
+
+
+# Peaks recorded before workload buckets existed came from these runs: edit at
+# 1024x1024 (bucket 2), img2img at 512x512 plus a 512x512 init image (bucket 1).
+LEGACY_BUCKET = {"edit": 2, "img2img": 1}
+
+
+def load_peaks() -> dict[PeakKey, float]:
+    """Observed peaks survive restarts, so the guard stops guessing once calibrated."""
     import json
 
     try:
         raw = json.loads(PEAKS_FILE.read_text())
-        return {(v, None if q == "bf16" else int(q)): float(p) for key, p in raw.items() for v, q in [key.split("/")]}
     except (OSError, ValueError):
         return {}
+    peaks: dict[PeakKey, float] = {}
+    for key, p in raw.items():
+        parts = key.split("/")
+        v, q = parts[0], None if parts[1] == "bf16" else int(parts[1])
+        b = int(parts[2]) if len(parts) > 2 else LEGACY_BUCKET.get(v, 2)
+        peaks[(v, q, b)] = max(peaks.get((v, q, b), 0.0), float(p))
+    return peaks
 
 
 def save_peaks() -> None:
     import json
 
-    PEAKS_FILE.write_text(json.dumps({f"{v}/{'bf16' if q is None else q}": round(p, 2) for (v, q), p in observed_peak_gb.items()}))
+    PEAKS_FILE.write_text(json.dumps({f"{v}/{_qkey(q)}/{b}": round(p, 2) for (v, q, b), p in sorted(observed_peak_gb.items(), key=str)}))
 
 
-observed_peak_gb: dict[tuple[str, int | None], float] = load_peaks()
+observed_peak_gb: dict[PeakKey, float] = load_peaks()
 
 
-def expected_peak_gb(variant: str, quantize: int | None) -> float:
-    return observed_peak_gb.get((variant, quantize), PEAK_ESTIMATE_GB[(variant, quantize)])
+def expected_peak_gb(variant: str, quantize: int | None, bucket: int) -> float:
+    """Measured peak for this workload, else the nearest larger measured one (an
+    upper bound), else the largest measured plus BUCKET_STEP_GB per bucket above it,
+    else the conservative default."""
+    measured = {b: p for (v, q, b), p in observed_peak_gb.items() if v == variant and q == quantize}
+    if bucket in measured:
+        return measured[bucket]
+    larger = [b for b in measured if b > bucket]
+    if larger:
+        return measured[min(larger)]
+    if measured:
+        top = max(measured)
+        return measured[top] + BUCKET_STEP_GB * (bucket - top)
+    return PEAK_ESTIMATE_GB[(variant, quantize)] + BUCKET_STEP_GB * max(0, bucket - 2)
 
 
 def fallback_chain(quantize: int | None) -> list[int | None]:
@@ -142,7 +219,7 @@ class ModelManager:
         self.quantize: int | None = None
         self.last_used: float | None = None
 
-    def load(self, variant: Variant, quantize: int | None) -> tuple[float, int | None]:
+    def load(self, variant: Variant, quantize: int | None, bucket: int = 2) -> tuple[float, int | None]:
         """Load `variant`, stepping down the quantization if memory is short.
 
         Returns (seconds spent loading, quantization actually loaded).
@@ -154,12 +231,12 @@ class ModelManager:
         self.unload()
         free = available_gb()
         for q in fallback_chain(quantize):
-            need = expected_peak_gb(variant, q) + HEADROOM_GB
+            need = expected_peak_gb(variant, q, bucket) + HEADROOM_GB
             if free >= need:
                 if q != quantize:
                     log.warning("memory guard: %.1f GB available, stepping %s -> %s", free, quantize, q)
                 return self._load(variant, q), q
-        need = expected_peak_gb(variant, fallback_chain(quantize)[-1]) + HEADROOM_GB
+        need = expected_peak_gb(variant, fallback_chain(quantize)[-1], bucket) + HEADROOM_GB
         raise MemoryGuardError(
             f"not enough free memory to load the {variant} model: ~{need:.0f} GB needed "
             f"(peak estimate + {HEADROOM_GB:.0f} GB headroom), {free:.1f} GB available. {NO_SELF_REMEDY}"
@@ -193,13 +270,14 @@ class ModelManager:
         mx.clear_cache()
         return True
 
-    def generate(self, *, variant: Variant, quantize: int | None, **kwargs):
+    def generate(self, *, variant: Variant, quantize: int | None, megapixels: float, **kwargs):
         import mlx.core as mx
 
-        load_seconds, quantize = self.load(variant, quantize)
+        bucket = workload_bucket(megapixels)
+        load_seconds, quantize = self.load(variant, quantize, bucket)
         assert self.model is not None
         # Generation needs working memory on top of the resident weights.
-        working = max(0.0, expected_peak_gb(variant, quantize) - mx.get_active_memory() / GB)
+        working = max(0.0, expected_peak_gb(variant, quantize, bucket) - mx.get_active_memory() / GB)
         free = available_gb()
         if free < working + HEADROOM_GB:
             raise MemoryGuardError(
@@ -213,7 +291,7 @@ class ModelManager:
         finally:
             mx.clear_cache()
         peak = mx.get_peak_memory() / GB
-        key = (variant, quantize)
+        key = (variant, quantize, bucket)
         if peak > observed_peak_gb.get(key, 0.0):
             observed_peak_gb[key] = peak
             save_peaks()
@@ -313,7 +391,8 @@ class EditRequest(CommonRequest):
         return v
 
 
-async def run_jobs(req: CommonRequest, request: Request, variant: Variant, kwargs_for: Callable[[int], dict]) -> dict:
+async def run_jobs(req: CommonRequest, request: Request, variant: Variant, megapixels: float,
+                   kwargs_for: Callable[[int], dict]) -> dict:
     """Queue req.n generations on the worker and package them OpenAI-style."""
     if state["pending"] >= MAX_QUEUE:
         raise HTTPException(429, f"queue full ({MAX_QUEUE} requests pending); retry later")
@@ -327,7 +406,7 @@ async def run_jobs(req: CommonRequest, request: Request, variant: Variant, kwarg
             def run(seed=base_seed + i):
                 state["busy"] = True
                 try:
-                    return manager.generate(variant=variant, quantize=quantize, seed=seed, **kwargs_for(seed))
+                    return manager.generate(variant=variant, quantize=quantize, megapixels=megapixels, seed=seed, **kwargs_for(seed))
                 finally:
                     state["busy"] = False
 
@@ -394,7 +473,7 @@ async def lifespan(_: FastAPI):
     await on_worker(manager.unload)
 
 
-app = FastAPI(title="image-server", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="image-server", version="0.4.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -410,12 +489,13 @@ async def health():
         "idle_unload_seconds": IDLE_UNLOAD,
         "last_used": manager.last_used,
         "memory": {
-            "available_gb": round(available_gb(), 1),
+            **{f"{k}_gb": round(v, 1) for k, v in memory_breakdown().items()},
             "headroom_gb": HEADROOM_GB,
             "mlx_memory_limit_gb": MEMORY_LIMIT_GB,
             "mlx_cache_limit_gb": CACHE_LIMIT_GB,
             "auto_downgrade": AUTO_DOWNGRADE,
-            "observed_peak_gb": {f"{v}/{'bf16' if q is None else f'q{q}'}": round(p, 1) for (v, q), p in observed_peak_gb.items()},
+            "observed_peak_gb": {f"{v}/{'bf16' if q is None else f'q{q}'}/{bucket_label(b)}": round(p, 1)
+                                 for (v, q, b), p in sorted(observed_peak_gb.items(), key=str)},
         },
     }
 
@@ -430,7 +510,7 @@ async def models():
 async def load(variant: Variant = "edit", quantize: Literal[0, 4, 8] | None = None):
     q = DEFAULT_QUANTIZE if quantize is None else (quantize or None)
     try:
-        took, used = await on_worker(manager.load, variant, q)
+        took, used = await on_worker(manager.load, variant, q, 2)
     except MemoryGuardError as error:
         raise HTTPException(503, str(error)) from error
     return {"loaded": True, "variant": variant, "quantize": used, "load_seconds": round(took, 1)}
@@ -445,14 +525,16 @@ async def unload():
 async def generate(req: GenerationRequest, request: Request):
     width, height = parse_size(req.size)
     prompt = wrap_transparent(req.prompt, req.transparent)
+    mp = width * height / 1e6
     if req.image is None:
-        return await run_jobs(req, request, "edit", lambda _seed: dict(
+        return await run_jobs(req, request, "edit", mp, lambda _seed: dict(
             prompt=prompt, num_inference_steps=req.steps, width=width, height=height,
             guidance=req.guidance, negative_prompt=req.negative_prompt,
         ))
     with tempfile.TemporaryDirectory(prefix="img2img-") as tmp:
         init = decode_image(req.image, "image", Path(tmp))
-        return await run_jobs(req, request, "img2img", lambda _seed: dict(
+        # The init image is encoded at the output size, so it doubles the pixels processed.
+        return await run_jobs(req, request, "img2img", 2 * mp, lambda _seed: dict(
             prompt=prompt, num_inference_steps=req.steps, width=width, height=height,
             guidance=req.guidance, negative_prompt=req.negative_prompt,
             # mflux's image_strength is the fraction of the init image KEPT; the API's
@@ -467,7 +549,10 @@ async def edit(req: EditRequest, request: Request):
     prompt = wrap_transparent(req.prompt, req.transparent)
     with tempfile.TemporaryDirectory(prefix="edit-") as tmp:
         refs = [decode_image(img, f"image{i + 1}", Path(tmp)) for i, img in enumerate(req.images)]
-        return await run_jobs(req, request, "edit", lambda _seed: dict(
+        # Each reference is resized to the output_resolution pixel budget, plus the output itself.
+        budget = req.output_resolution ** 2
+        mp = (len(refs) * budget + (size[0] * size[1] if size else budget)) / 1e6
+        return await run_jobs(req, request, "edit", mp, lambda _seed: dict(
             prompt=prompt, num_inference_steps=req.steps, guidance=req.guidance,
             negative_prompt=req.negative_prompt, image_paths=refs, output_resolution=req.output_resolution,
             **({"width": size[0], "height": size[1]} if size else {}),

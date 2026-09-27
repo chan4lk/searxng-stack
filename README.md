@@ -213,19 +213,24 @@ Requests run one at a time; more than 4 waiting returns `429`.
 
 This matters most on a Mac shared with a local LLM server.
 
-- **Pre-load check:** before loading, the server compares what macOS reports
-  as available with the variant's expected peak plus `IMAGE_MEMORY_HEADROOM_GB`
+- **Pre-load check:** before loading, the server compares available memory
+  with the expected peak for **this job's size**, plus `IMAGE_MEMORY_HEADROOM_GB`
   (default 4). If memory is short, it steps down bf16 → 8-bit → 4-bit
-  (`IMAGE_AUTO_DOWNGRADE=1`, the default). If even 4-bit doesn't fit, it
-  answers **503** with the numbers, and the response's `quantize` shows what
-  was actually used.
+  (`IMAGE_AUTO_DOWNGRADE=1`). If even 4-bit doesn't fit, it answers **503** with
+  the numbers, and the response's `quantize` shows what was actually used.
+- **Available memory is counted the way macOS counts it:** total minus app
+  (anonymous) memory, wired and compressed, plus purgeable. Disk cache, such as
+  a local LLM's memory-mapped weights, is **reclaimable**: macOS drops it and
+  re-reads from disk. psutil's free+inactive treated recently used cache as
+  taken, so jobs were refused right after the LLM had answered.
 - **Pre-generation check:** before each image, it confirms there's room for the
-  generation's working memory on top of the loaded weights. Otherwise it
-  answers 503.
-- **Measured peaks:** each response reports `peak_memory_gb`, and the largest
-  peak per variant is saved to `~/.image-server-peaks.json`. The check uses it
-  instead of the built-in estimates, and it persists across restarts. For
-  reference, 8-bit edit peaks at ~21 GB at 512² and ~30 GB at 1024².
+  generation's working memory on top of the loaded weights.
+- **Size-aware measured peaks:** each response reports `peak_memory_gb`, and
+  peaks are saved per variant, quantization and **workload** (output pixels
+  plus reference pixels: ≤0.3, ≤0.7, ≤1.2, ≤2.5, ≤5 MP, larger) in
+  `~/.image-server-peaks.json`. An unmeasured workload uses the next larger
+  measured one, and anything above the largest measured adds 6 GB per step.
+  Measured for 8-bit edit: **21 GB at 512², 25 GB at 768², 29.5 GB at 1024²**.
 - **MLX limits:** `IMAGE_MEMORY_LIMIT_GB` (default 32) and
   `IMAGE_CACHE_LIMIT_GB` (default 2), and the cache is cleared after every job.
   MLX treats the memory limit as a guideline that only fails once RAM and swap

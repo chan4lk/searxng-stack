@@ -32,6 +32,9 @@ llm-pi-ai:
           # on the Studio, then pick the matching model here.
         - id: incoai/Qwen3.6-35B-A3B-Splash
           name: Qwen3.6 35B-A3B Splash (MoE)
+          # Verified: answers questions about images (OpenAI image_url parts).
+          # Lets read_image and generate_image show images to this model.
+          input: [text, image]
           contextWindow: 131072
           maxTokens: 16384
           # Also emits reasoning_content, and reasons at length: keep maxTokens

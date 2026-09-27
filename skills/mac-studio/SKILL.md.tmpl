@@ -107,7 +107,12 @@ curl -s http://__SERVER_NAME__.__TAILNET__:8890/v1/images/generations -H 'Conten
 `~/.dsh/plugins/image-generate.mjs`. It saves PNGs into the session's workspace
 (default `generated-images/`, or a `filename` relative to the workspace) and
 refuses any path outside it. The alias points it at the server with
-`IMAGE_SERVER_URL`. If the tool reports that the image server is unreachable,
+`IMAGE_SERVER_URL`. The chat UI only draws images on `read_image`'s own card,
+so when the current model accepts images, the tool's result tells the agent
+to call `read_image` on the saved file. That shows the image in the chat and
+lets the model check it. Only the 35B-A3B entry declares image input
+(`input: [text, image]` in `splash.settings.yaml`). On the 27B the image is
+saved but not shown. If the tool reports that the image server is unreachable,
 check `image-server.sh status` on the Studio.
 
 ## Common mistakes

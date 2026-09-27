@@ -205,6 +205,12 @@ agent ("make a 1024x768 hero image of … and save it as assets/hero.png"). It
 saves PNGs inside the session's workspace (by default in `generated-images/`),
 refuses paths outside it, and allows 15 minutes per call to cover the first
 model load.
+
+To show the image in the chat, the tool's result asks the agent to open the
+file with `read_image`, whose card is the only one the dsh UI draws images
+on. This happens only when the session's model accepts images, meaning its
+settings entry has `input: [text, image]`. The template sets that for
+`Qwen3.6-35B-A3B-Splash`, which was checked against a real image.
 Requests run one at a time; more than 4 waiting returns `429`.
 
 The first run downloads `Qwen/Qwen-Image-2.1`, about 33 GB, into the Hugging

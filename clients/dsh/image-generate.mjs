@@ -22,6 +22,21 @@ const SIZES = ['512x512', '768x768', '1024x1024', '1024x768', '768x1024', '1280x
 // First use loads the model (can take minutes), then 1024², 40 steps is ~80-130 s.
 const TIMEOUT_MS = 15 * 60 * 1000
 
+// Same test read_image applies: does the model serving this session accept images?
+async function routeAcceptsImages(ctx, exec) {
+  try {
+    const routed = exec.agent?.session.requestHeader()?.config
+    const provider = routed?.provider ?? exec.agent?.options.provider
+    const model = routed?.model ?? exec.agent?.options.model
+    const llm = ctx.get('llm')
+    if (!provider || !model || !llm) return false
+    const info = await llm.resolveModelInfo(provider, model, exec.signal)
+    return Boolean(info.inputModalities?.includes('image'))
+  } catch {
+    return false
+  }
+}
+
 function slug(text) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'image'
 }
@@ -42,7 +57,8 @@ export function apply(ctx) {
     name: 'generate_image',
     description:
       'Generate an image from a text prompt with a local Qwen-Image 2.1 model and save it as a PNG in the workspace. ' +
-      'Returns the saved file path. Slow: allow 1-3 minutes per image (longer on first use while the model loads). ' +
+      'Returns the saved file path. To show the result in the chat, follow up with read_image on that path. ' +
+      'Slow: allow 1-3 minutes per image (longer on first use while the model loads). ' +
       'Write a detailed visual prompt (subject, setting, style, lighting, composition).',
     parameters: {
       prompt: { type: 'string', required: true, description: 'Detailed description of the image to generate.' },
@@ -65,14 +81,21 @@ export function apply(ctx) {
           steps: { type: 'integer', required: true },
           seconds: { type: 'number', required: true },
           model_load_seconds: { type: 'number', required: true },
+          show_with_read_image: { type: 'boolean', required: true },
         },
       },
+      // The chat UI draws inline images only on read_image's own card, so the
+      // result asks the agent to open the file with read_image when it can.
       render: (_args, v) => [{
         type: 'text',
         text: `Saved a ${v.size} image to ${v.path} (seed ${v.seed}, ${v.steps} steps, ${v.seconds}s` +
           (v.model_load_seconds > 1 ? `, incl. ${v.model_load_seconds}s model load` : '') +
-          `). Server copy: ${v.url}`,
+          `). Server copy: ${v.url}` +
+          (v.show_with_read_image
+            ? `\nNow call read_image with file_path "${v.path}" so the image is shown to the user in the chat and you can check it matches the request.`
+            : ''),
       }],
+      presentationMeta: (_args, v) => ({ path: v.path }),
     },
     timeoutMs: TIMEOUT_MS,
     isConcurrencySafe: () => false,
@@ -114,8 +137,10 @@ export function apply(ctx) {
 
       const png = await fetch(item.url, { signal: exec.signal })
       if (!png.ok) throw new Error(`could not download ${item.url}: HTTP ${png.status}`)
+      const data = new Uint8Array(await png.arrayBuffer())
       await mkdir(dirname(target), { recursive: true })
-      await writeFile(target, Buffer.from(await png.arrayBuffer()))
+      await writeFile(target, data)
+      const showable = Boolean(ctx.tools.get('read_image')) && (await routeAcceptsImages(ctx, exec))
 
       return {
         path: relative(workspace, target) || target,
@@ -125,6 +150,7 @@ export function apply(ctx) {
         steps,
         seconds: body.generate_seconds ?? 0,
         model_load_seconds: body.load_seconds ?? 0,
+        show_with_read_image: showable,
       }
     },
   }))

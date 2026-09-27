@@ -1,3 +1,5 @@
 .env
 install.env
 .DS_Store
+image-server/.venv/
+__pycache__/

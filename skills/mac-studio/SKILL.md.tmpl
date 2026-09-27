@@ -1,6 +1,6 @@
 ---
 name: __SERVER_NAME__
-description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash (the local Qwen LLM server), or the SearXNG search stack, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
+description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash (the local Qwen LLM server), the SearXNG search stack, or local image generation (Qwen-Image, image-server), or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
 ---
 
 # Managing the Mac Studio
@@ -41,6 +41,7 @@ foreground, not in the background, so the URL reaches you.
 |---|---|---|---|
 | **Splash** (Qwen3.8-27B LLM) | `http://__SERVER_IP__:8000` (OpenAI `/v1/chat/completions` and Anthropic `/v1/messages`) | Foreground `splash serve` in a login shell, **not a service** | see below |
 | **SearXNG** + Valkey | `http://__SERVER_NAME__.__TAILNET__:8889` (`/search?q=…&format=json`) | Docker Compose on Colima, published with `tailscale serve` | `~/searxng-stack/searxng.sh up\|down\|restart\|status\|logs\|test` |
+| **image-server** (Qwen-Image 2.1 via mflux) | `http://__SERVER_NAME__.__TAILNET__:8890` (`POST /v1/images/generations`, OpenAI-style) | LaunchAgent `com.searxng-stack.image-server`; model loads on demand | `~/searxng-stack/image-server/image-server.sh install\|status\|logs\|restart\|unload\|test` |
 | **Colima** (Docker VM: 2 CPU, 2 GB) | — | `brew services` LaunchAgent, starts at login | `colima status\|start\|stop` |
 | **Ollama** | `127.0.0.1:11434`, local to the Studio only | macOS app | — |
 
@@ -79,6 +80,28 @@ studio.sh run 'pkill -f "splash serve|libexec/server/server.py"; sleep 3; nohup 
 ```
 
 Loading the model takes a while, so check `curl -s http://__SERVER_IP__:8000/v1/models` until it lists the model.
+
+### image-server
+
+When idle it uses about 100 MB. The first request loads the model, which takes
+a minute or more. It unloads after 10 idle minutes (`IMAGE_IDLE_UNLOAD`). A
+request can pass `"quantize"` as 0 (bf16), 4 or 8; the default is 8. Requests
+run one at a time, and after 4 are waiting, new ones get `429`.
+
+| Setting | Per the mflux docs (M5 Max benchmark) |
+|---|---|
+| bf16 (`quantize` 0) | Peak ~46 GB; ~78 s for 1024², 40 steps |
+| 8-bit | Less memory; the 17.5 GB text encoder always stays bf16 |
+
+**Memory with Splash:** bf16 doesn't fit next to Splash. Before a bf16 run,
+check free memory, or ask the user to stop Splash first. Free memory
+immediately with `image-server.sh unload`. The service writes PNGs to
+`~/image-server-outputs` and deletes them after 7 days.
+
+```bash
+curl -s http://__SERVER_NAME__.__TAILNET__:8890/v1/images/generations -H 'Content-Type: application/json' \
+  -d '{"prompt":"...","size":"1024x1024","steps":40,"response_format":"url"}'
+```
 
 ## Common mistakes
 

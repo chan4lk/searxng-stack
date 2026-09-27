@@ -23,6 +23,7 @@ DeepSeek Harness (`dsh`) or self-hosted LLM setups.
 | `clients/dsh/splash.*.tmpl` | dsh settings and overlay: Splash models + SearXNG search |
 | `clients/claude-code/splash-settings.json.tmpl` | Claude Code settings for a Splash server |
 | `skills/mac-studio/` | Claude Code skill (plus SSH helper) for managing the server from a laptop |
+| `image-server/` | On-demand Qwen-Image 2.1 API (mflux/MLX); loads the model per request and unloads when idle |
 | `install.sh`, `install.env.example` | Installs everything under `clients/` and `skills/` on a client machine |
 
 The server side (this stack) and the client side (the laptop running the
@@ -165,6 +166,45 @@ the browser profile signed in to your tailnet to approve SSH access.
 `--model`, then pick that model in the dsh UI. For `claude-splash`, set
 `SPLASH_MODEL` in `install.env` and re-run `./install.sh`. A request for the
 model that isn't loaded fails with `HTTP 404 model_not_found`.
+
+## On-demand image generation (`image-server/`)
+
+An OpenAI-style image API for Qwen-Image 2.1, run with
+[mflux](https://github.com/filipstrand/mflux), the MLX-native diffusion
+library. The model **isn't kept in memory**: the first request loads it, and it
+unloads after 10 idle minutes, so the server holds ~100 MB until you use it.
+
+```sh
+cd ~/searxng-stack/image-server
+./image-server.sh install     # uv sync, launchd LaunchAgent, tailscale serve on :8890
+./image-server.sh test        # one 512x512 image (the first call also loads the model)
+```
+
+```sh
+curl http://<machine>.<tailnet>.ts.net:8890/v1/images/generations \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt": "a red fox in fresh snow, golden hour", "size": "1024x1024", "steps": 40}'
+```
+
+| Field | Default | Notes |
+|---|---|---|
+| `prompt` | — | required |
+| `size` | `1024x1024` | multiples of 16, 256–2048 |
+| `n` | 1 | up to 4 images, with consecutive seeds |
+| `steps` | 40 | the model's recommended default |
+| `guidance` / `negative_prompt` | 1.0 / none | true CFG runs only with guidance > 1 **and** a negative prompt |
+| `seed` | random | returned per image |
+| `quantize` | 8 | `0` = bf16 (best quality, ~46 GB peak), `4`, `8`; switching reloads the model |
+| `response_format` | `b64_json` | or `url` (served from `/images/<name>`, kept 7 days) |
+
+Other endpoints: `GET /health`, `GET /v1/models`, `POST /v1/load`, `POST /v1/unload`.
+Requests run one at a time; more than 4 waiting returns `429`.
+
+The first run downloads `Qwen/Qwen-Image-2.1`, about 33 GB, into the Hugging
+Face cache. On a 64 GB Mac, don't run bf16 alongside a local LLM server; 8-bit
+leaves room for one. The weights are under the
+[Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1), so check
+its terms before any commercial use.
 
 ## Security notes
 

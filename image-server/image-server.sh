@@ -11,7 +11,7 @@
 # The service idles at ~100 MB: the model loads on the first request and
 # unloads after IMAGE_IDLE_UNLOAD seconds (default 600) without work.
 # Env overrides (read at install): IMAGE_PORT (8890), IMAGE_QUANTIZE (8; 0 = bf16),
-# IMAGE_IDLE_UNLOAD (600), IMAGE_MEMORY_HEADROOM_GB (4), IMAGE_MEMORY_LIMIT_GB (32),
+# IMAGE_IDLE_UNLOAD (600), IMAGE_MEMORY_GUARD (0 = off), IMAGE_MEMORY_HEADROOM_GB (4), IMAGE_MEMORY_LIMIT_GB (0 = MLX default),
 # IMAGE_CACHE_LIMIT_GB (2), IMAGE_AUTO_DOWNGRADE (1), TS_SERVE_PROTO (http|https). stop/restart/install refuse
 # while a generation is running or queued; FORCE=1 overrides.
 set -euo pipefail
@@ -62,7 +62,8 @@ write_plist() {
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>IMAGE_QUANTIZE</key><string>${IMAGE_QUANTIZE:-8}</string>
     <key>IMAGE_IDLE_UNLOAD</key><string>${IMAGE_IDLE_UNLOAD:-600}</string>
-    <key>IMAGE_MEMORY_LIMIT_GB</key><string>${IMAGE_MEMORY_LIMIT_GB:-32}</string>
+    <key>IMAGE_MEMORY_GUARD</key><string>${IMAGE_MEMORY_GUARD:-0}</string>
+    <key>IMAGE_MEMORY_LIMIT_GB</key><string>${IMAGE_MEMORY_LIMIT_GB:-0}</string>
     <key>IMAGE_CACHE_LIMIT_GB</key><string>${IMAGE_CACHE_LIMIT_GB:-2}</string>
     <key>IMAGE_MEMORY_HEADROOM_GB</key><string>${IMAGE_MEMORY_HEADROOM_GB:-4}</string>
     <key>IMAGE_AUTO_DOWNGRADE</key><string>${IMAGE_AUTO_DOWNGRADE:-1}</string>

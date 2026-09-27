@@ -209,9 +209,12 @@ negative prompt), `quantize` (`8` default, `4`, or `0` = bf16), and
 Other endpoints: `GET /health`, `GET /v1/models`, `POST /v1/load?variant=edit|img2img`, `POST /v1/unload`.
 Requests run one at a time; more than 4 waiting returns `429`.
 
-### Memory guardrails
+### Memory guardrails (off by default)
 
-This matters most on a Mac shared with a local LLM server.
+The guard is **disabled by default** (`IMAGE_MEMORY_GUARD=0`). On a Mac shared
+with a local LLM it refused too many jobs, so requests now load the
+quantization they ask for and run, and macOS swaps if it has to. To turn it on:
+`IMAGE_MEMORY_GUARD=1 ./image-server.sh install`. When enabled:
 
 - **Pre-load check:** before loading, the server compares available memory
   with the expected peak for **this job's size**, plus `IMAGE_MEMORY_HEADROOM_GB`
@@ -231,7 +234,7 @@ This matters most on a Mac shared with a local LLM server.
   `~/.image-server-peaks.json`. An unmeasured workload uses the next larger
   measured one, and anything above the largest measured adds 6 GB per step.
   Measured for 8-bit edit: **21 GB at 512², 25 GB at 768², 29.5 GB at 1024²**.
-- **MLX limits:** `IMAGE_MEMORY_LIMIT_GB` (default 32) and
+- **MLX limits:** `IMAGE_MEMORY_LIMIT_GB` (default 0 = MLX's own default) and
   `IMAGE_CACHE_LIMIT_GB` (default 2), and the cache is cleared after every job.
   MLX treats the memory limit as a guideline that only fails once RAM and swap
   are exhausted, so the pre-checks above are the real guard.

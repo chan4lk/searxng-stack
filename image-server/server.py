@@ -54,7 +54,10 @@ GB = 1024**3
 # Memory guardrails. MLX's set_memory_limit is only a guideline (it raises only
 # once RAM and swap are exhausted), so the real guard is checking what macOS
 # reports as available before loading and before each generation.
-MEMORY_LIMIT_GB = float(os.environ.get("IMAGE_MEMORY_LIMIT_GB", "32"))
+# Off by default: the checks refused too many jobs on a Mac shared with a local
+# LLM. With it off, requests load the quantization they ask for and run.
+MEMORY_GUARD = os.environ.get("IMAGE_MEMORY_GUARD", "0") == "1"
+MEMORY_LIMIT_GB = float(os.environ.get("IMAGE_MEMORY_LIMIT_GB", "0"))  # 0 = MLX default
 CACHE_LIMIT_GB = float(os.environ.get("IMAGE_CACHE_LIMIT_GB", "2"))
 HEADROOM_GB = float(os.environ.get("IMAGE_MEMORY_HEADROOM_GB", "4"))
 AUTO_DOWNGRADE = os.environ.get("IMAGE_AUTO_DOWNGRADE", "1") == "1"
@@ -133,7 +136,8 @@ def available_gb() -> float:
 def configure_mlx_limits() -> None:
     import mlx.core as mx
 
-    mx.set_memory_limit(int(MEMORY_LIMIT_GB * GB))
+    if MEMORY_LIMIT_GB > 0:
+        mx.set_memory_limit(int(MEMORY_LIMIT_GB * GB))
     mx.set_cache_limit(int(CACHE_LIMIT_GB * GB))
 
 
@@ -207,7 +211,7 @@ def fallback_chain(quantize: int | None) -> list[int | None]:
     """Quantization levels to try, from the requested one down to 4-bit."""
     chain = [None, 8, 4]
     chain = chain[chain.index(quantize):]
-    return chain if AUTO_DOWNGRADE else chain[:1]
+    return chain if AUTO_DOWNGRADE and MEMORY_GUARD else chain[:1]
 
 
 class ModelManager:
@@ -229,6 +233,8 @@ class ModelManager:
         if self.model is not None and self.variant == variant and self.quantize in fallback_chain(quantize):
             return 0.0, self.quantize
         self.unload()
+        if not MEMORY_GUARD:
+            return self._load(variant, quantize), quantize
         free = available_gb()
         for q in fallback_chain(quantize):
             need = expected_peak_gb(variant, q, bucket) + HEADROOM_GB
@@ -278,7 +284,7 @@ class ModelManager:
         assert self.model is not None
         # Generation needs working memory on top of the resident weights.
         working = max(0.0, expected_peak_gb(variant, quantize, bucket) - mx.get_active_memory() / GB)
-        free = available_gb()
+        free = available_gb() if MEMORY_GUARD else float("inf")
         if free < working + HEADROOM_GB:
             raise MemoryGuardError(
                 f"not enough free memory to generate right now: ~{working + HEADROOM_GB:.0f} GB needed, "
@@ -489,6 +495,7 @@ async def health():
         "idle_unload_seconds": IDLE_UNLOAD,
         "last_used": manager.last_used,
         "memory": {
+            "guard": MEMORY_GUARD,
             **{f"{k}_gb": round(v, 1) for k, v in memory_breakdown().items()},
             "headroom_gb": HEADROOM_GB,
             "mlx_memory_limit_gb": MEMORY_LIMIT_GB,

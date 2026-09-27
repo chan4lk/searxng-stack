@@ -105,17 +105,14 @@ far better than `strength`, which barely restyles.
 while `busy` or `queued` is set, because a restart cuts off whoever is
 generating. Use `FORCE=1` only if the user agrees.
 
-**Memory guardrails:** before loading, the server checks available memory
-against the peak measured for **this job's size** plus 4 GB of headroom.
-Available is counted the way macOS counts it: total minus app memory, wired
-and compressed. Splash's disk-cached weights count as reclaimable. If memory
-is short, it steps down bf16 → 8-bit → 4-bit; if even 4-bit doesn't fit, it
-returns **503** with the numbers. The response's `quantize` says what was
-actually used. Free memory needed for 8-bit: **~25 GB at 512², ~29 GB at
-768², ~33.5 GB at 1024²**. Peaks are saved in `~/.image-server-peaks.json`;
-`/health` → `memory` shows the breakdown (app, wired, disk cache) and the
-peaks. On a 503, don't retry blindly: tell the user what's using memory. Free
-the image model's memory immediately with `image-server.sh unload`. The service
+**Memory guard: off** (`IMAGE_MEMORY_GUARD=0`, at the user's request; it
+refused too many jobs). Requests load the quantization they ask for (default
+8-bit) and run; macOS swaps if memory is tight. Measured 8-bit peaks: ~21 GB
+at 512², ~25 GB at 768², ~29.5 GB at 1024², ~33 GB for img2img. Avoid bf16
+(~46 GB) while Splash is running. `/health` → `memory` shows the breakdown
+and swap pressure. To re-enable the guard: `IMAGE_MEMORY_GUARD=1
+./image-server.sh install`. Free the image model's memory immediately with
+`image-server.sh unload`. The service
 writes PNGs to `~/image-server-outputs` and deletes them after 7 days.
 
 **From dsh:** the plugin `~/.dsh/plugins/image-generate.mjs` adds two tools:

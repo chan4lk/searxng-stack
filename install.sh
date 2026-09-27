@@ -11,7 +11,7 @@
 #   ~/.claude/splash-settings.json                      Claude Code -> Splash
 #   ~/.claude/skills/<SERVER_NAME>/                     server-management skill
 #   ~/.dsh/splash.settings.yaml, ~/.dsh/splash.patch.yml dsh -> Splash + SearXNG
-#   ~/.dsh/plugins/{searxng-search,cwd-workspace,image-generate,studio-guard}.mjs  dsh plugins
+#   ~/.dsh/plugins/{searxng-search,cwd-workspace,image-generate,music-generate,studio-guard}.mjs
 #   aliases claude-splash / dsh-splash in ~/.zshrc
 set -euo pipefail
 
@@ -101,6 +101,7 @@ install_file clients/dsh/splash.patch.yml.tmpl     "$HOME/.dsh/splash.patch.yml"
 install_file clients/dsh/searxng-search.mjs        "$HOME/.dsh/plugins/searxng-search.mjs"
 install_file clients/dsh/cwd-workspace.mjs         "$HOME/.dsh/plugins/cwd-workspace.mjs"
 install_file clients/dsh/image-generate.mjs        "$HOME/.dsh/plugins/image-generate.mjs"
+install_file clients/dsh/music-generate.mjs        "$HOME/.dsh/plugins/music-generate.mjs"
 install_file clients/dsh/studio-guard.mjs          "$HOME/.dsh/plugins/studio-guard.mjs"
 echo "Shell aliases (~/.zshrc)"
 add_alias claude-splash "alias claude-splash='claude --settings ~/.claude/splash-settings.json'"

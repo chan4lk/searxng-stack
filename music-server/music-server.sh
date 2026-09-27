@@ -1,30 +1,29 @@
 #!/usr/bin/env bash
-# Run the on-demand image API (Qwen-Image 2.1 via mflux) as a launchd service
-# on this Mac and publish it to the tailnet.
+# Run the on-demand music API (ACE-Step 1.5) as a launchd service on this Mac
+# and publish it to the tailnet.
 #
-#   ./image-server.sh install    uv sync, install + start the LaunchAgent, publish via tailscale serve
-#   ./image-server.sh uninstall  stop and remove the LaunchAgent and tailnet publish
-#   ./image-server.sh start | stop | restart | status | logs
-#   ./image-server.sh unload     free the model's memory now (it also unloads itself when idle)
-#   ./image-server.sh test [prompt]   generate one small image and save it to /tmp
+#   ./music-server.sh install    uv sync, install + start the LaunchAgent, publish via tailscale serve
+#   ./music-server.sh uninstall  stop and remove the LaunchAgent and tailnet publish
+#   ./music-server.sh start | stop | restart | status | logs
+#   ./music-server.sh unload     stop the ACE-Step backend now (it also stops itself when idle)
+#   ./music-server.sh test [prompt]   generate a 20-second instrumental and save it to /tmp
 #
-# The service idles at ~100 MB: the model loads on the first request and
-# unloads after IMAGE_IDLE_UNLOAD seconds (default 600) without work.
-# Env overrides (read at install): IMAGE_PORT (8890), IMAGE_QUANTIZE (8; 0 = bf16),
-# IMAGE_IDLE_UNLOAD (600), IMAGE_MEMORY_GUARD (0 = off), IMAGE_MEMORY_HEADROOM_GB (4), IMAGE_MEMORY_LIMIT_GB (0 = MLX default),
-# IMAGE_CACHE_LIMIT_GB (2), IMAGE_AUTO_DOWNGRADE (1), TS_SERVE_PROTO (http|https). stop/restart/install refuse
-# while a generation is running or queued; FORCE=1 overrides.
+# The service idles at ~50 MB: the first request starts ACE-Step (~/ace-step,
+# see README) and it is stopped again after MUSIC_IDLE_UNLOAD seconds (default 600).
+# Env overrides (read at install): MUSIC_PORT (8891), MUSIC_IDLE_UNLOAD (600),
+# ACE_STEP_DIR (~/ace-step), ACE_STEP_LM_MODEL (acestep-5Hz-lm-1.7B), TS_SERVE_PROTO.
+# stop/restart/install refuse while a job is running or queued; FORCE=1 overrides.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 DIR="$(pwd)"
-PORT="${IMAGE_PORT:-8890}"
+PORT="${MUSIC_PORT:-8891}"
 PROTO="${TS_SERVE_PROTO:-http}"
-LABEL="com.searxng-stack.image-server"
+LABEL="com.searxng-stack.music-server"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
-LOG="$HOME/Library/Logs/image-server.log"
+LOG="$HOME/Library/Logs/music-server.log"
 LOCAL_URL="http://127.0.0.1:${PORT}"
 DOMAIN="gui/$(id -u)"
 
@@ -60,13 +59,9 @@ write_plist() {
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-    <key>IMAGE_QUANTIZE</key><string>${IMAGE_QUANTIZE:-8}</string>
-    <key>IMAGE_IDLE_UNLOAD</key><string>${IMAGE_IDLE_UNLOAD:-600}</string>
-    <key>IMAGE_MEMORY_GUARD</key><string>${IMAGE_MEMORY_GUARD:-0}</string>
-    <key>IMAGE_MEMORY_LIMIT_GB</key><string>${IMAGE_MEMORY_LIMIT_GB:-0}</string>
-    <key>IMAGE_CACHE_LIMIT_GB</key><string>${IMAGE_CACHE_LIMIT_GB:-2}</string>
-    <key>IMAGE_MEMORY_HEADROOM_GB</key><string>${IMAGE_MEMORY_HEADROOM_GB:-4}</string>
-    <key>IMAGE_AUTO_DOWNGRADE</key><string>${IMAGE_AUTO_DOWNGRADE:-1}</string>
+    <key>MUSIC_IDLE_UNLOAD</key><string>${MUSIC_IDLE_UNLOAD:-600}</string>
+    <key>ACE_STEP_DIR</key><string>${ACE_STEP_DIR:-$HOME/ace-step}</string>
+    <key>ACE_STEP_LM_MODEL</key><string>${ACE_STEP_LM_MODEL:-acestep-5Hz-lm-1.7B}</string>
   </dict>
   <key>WorkingDirectory</key><string>${DIR}</string>
   <key>RunAtLoad</key><true/>
@@ -105,7 +100,7 @@ ensure_idle() {
   local h; h="$(curl -s -m 3 "$LOCAL_URL/health" 2>/dev/null)" || return 0
   [[ -z $h ]] && return 0
   if python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d.get("busy") or d.get("queued") else 1)' "$h"; then
-    die "a generation is running or queued; retry when idle (./image-server.sh status) or use FORCE=1"
+    die "a generation is running or queued; retry when idle (./music-server.sh status) or use FORCE=1"
   fi
 }
 
@@ -139,10 +134,13 @@ case "${1:-}" in
   logs) tail -f "$LOG" ;;
   unload) curl -s -X POST "$LOCAL_URL/v1/unload"; echo ;;
   test)
-    out="/tmp/image-server-test-$(date +%s).png"
-    log "generating 512x512, 20 steps (first call also loads the model)"
-    curl -fsS -m 1800 "$LOCAL_URL/v1/images/generations" -H 'Content-Type: application/json' \
-      -d "$(python3 -c 'import json,sys; print(json.dumps({"prompt": sys.argv[1], "size": "512x512", "steps": 20, "seed": 7}))' "${2:-a red fox in fresh snow, golden hour, photo}")" \
-      | python3 -c 'import base64,json,sys; d=json.load(sys.stdin); open(sys.argv[1],"wb").write(base64.b64decode(d["data"][0]["b64_json"])); print("load", d["load_seconds"], "s | generate", d["generate_seconds"], "s | quantize", d["quantize"], "->", sys.argv[1])' "$out" ;;
+    out="/tmp/music-server-test-$(date +%s).mp3"
+    log "generating a 20 s instrumental (the first call also starts ACE-Step)"
+    body="$(python3 -c 'import json,sys; print(json.dumps({"prompt": sys.argv[1], "instrumental": True, "duration": 20, "seed": 7}))' "${2:-upbeat corporate pop, bright synths, punchy drums}")"
+    resp="$(curl -fsS -m 1800 "$LOCAL_URL/v1/music/generations" -H 'Content-Type: application/json' -d "$body")"
+    url="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["url"])' "$resp")"
+    curl -fsS -o "$out" "${url/$(tailnet_url)/$LOCAL_URL}" 2>/dev/null || curl -fsS -o "$out" "$url"
+    python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print("startup", d["startup_seconds"], "s | total", d["seconds"], "s | seed", d["seed"], "| metas", d["metas"])' "$resp"
+    log "saved $out" ;;
   *) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

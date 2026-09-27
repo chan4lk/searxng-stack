@@ -24,6 +24,8 @@ const DESTRUCTIVE = [
   /\bcolima\s+(stop|delete|restart)\b/,
   /\bdocker\b[^\n]*\b(stop|kill|rm|down|restart|pause)\b/,
   /\bimage-server\.sh\s+(stop|restart|install|uninstall|unload)\b/,
+  /\bmusic-server\.sh\s+(stop|restart|install|uninstall|unload)\b/,
+  /\bacestep-api\b[^\n]*\b(stop|kill)\b/,
   /\bsearxng\.sh\s+(down|restart|unserve)\b/,
   /\btailscale\s+(down|logout)\b/,
   /\btailscale\s+serve\b[^\n]*\boff\b/,
@@ -48,7 +50,7 @@ export function blockedReason(text, hosts) {
   const verb = DESTRUCTIVE.find((re) => re.test(text))
   if (!verb) return undefined
   return 'Blocked by studio-guard: this command would stop, kill, restart or remove something on the shared ' +
-    'server (Splash, image-server, SearXNG, Colima or the user\'s own jobs). Agents may not do that. ' +
+    'server (Splash, image-server, music-server, SearXNG, Colima or the user\'s own jobs). Agents may not do that. ' +
     'Do not try another way. Tell the user what you wanted to do and why, and let them decide.'
 }
 

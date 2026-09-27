@@ -47,6 +47,17 @@ async function routeAcceptsImages(ctx, exec) {
   }
 }
 
+// Local models sometimes emit malformed tool calls that fuse a key and its
+// value ("filename audio/x.mp3": 20). Reject unknown keys loudly so the model
+// retries with proper arguments instead of silently getting defaults.
+function rejectUnknownArgs(args, allowed) {
+  const unknown = Object.keys(args ?? {}).filter((k) => !allowed.includes(k))
+  if (unknown.length) {
+    throw new Error(`unknown argument(s): ${unknown.map((k) => JSON.stringify(k)).join(', ')}. ` +
+      `Valid arguments are: ${allowed.join(', ')}. Pass each as its own JSON field, e.g. {"filename": "audio/track.mp3", "duration": 20}.`)
+  }
+}
+
 function slug(text) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'image'
 }
@@ -212,6 +223,7 @@ export function apply(ctx, config = {}) {
     timeoutMs: TIMEOUT_MS,
     isConcurrencySafe: () => false,
     async execute(args, exec) {
+      rejectUnknownArgs(args, ['prompt', 'size', 'steps', 'init_image', 'strength', 'seed', 'transparent', 'negative_prompt', 'guidance', 'filename'])
       const size = args.size ?? '1024x1024'
       const steps = args.steps ?? 40
       if (!SIZES.includes(size)) throw new Error(`size must be one of ${SIZES.join(', ')}`)
@@ -246,6 +258,7 @@ export function apply(ctx, config = {}) {
     timeoutMs: TIMEOUT_MS,
     isConcurrencySafe: () => false,
     async execute(args, exec) {
+      rejectUnknownArgs(args, ['images', 'prompt', 'size', 'detail', 'steps', 'seed', 'transparent', 'negative_prompt', 'guidance', 'filename'])
       const images = Array.isArray(args.images) ? args.images : []
       if (images.length < 1 || images.length > 10) throw new Error('images must list 1 to 10 workspace paths')
       if (args.size && !SIZES.includes(args.size)) throw new Error(`size must be one of ${SIZES.join(', ')}`)

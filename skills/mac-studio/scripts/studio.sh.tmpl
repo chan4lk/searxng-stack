@@ -63,6 +63,7 @@ case "${1:-}" in
       else echo DOWN; fi
       printf "%-10s " searxng; curl -s -m 20 "http://127.0.0.1:8889/search?q=test&format=json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"up:\", len(d[\"results\"]), \"results\")" 2>/dev/null || echo DOWN
       printf "%-10s " images;  curl -s -m 5 http://127.0.0.1:8890/health | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"up:\", \"model LOADED (q=%s)\" % d[\"quantize\"] if d[\"loaded\"] else \"idle, model unloaded\", \"| busy\" if d[\"busy\"] else \"\")" 2>/dev/null || echo DOWN
+      printf "%-10s " music;   curl -s -m 5 http://127.0.0.1:8891/health | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"up:\", \"ACE-Step RUNNING\" if d[\"backend_running\"] else \"idle, ACE-Step stopped\", \"| busy\" if d[\"busy\"] else \"\")" 2>/dev/null || echo DOWN
       printf "%-10s " colima;  colima status >/dev/null 2>&1 && echo running || echo STOPPED
       printf "%-10s " serve;   tailscale serve status 2>/dev/null | grep -q 8889 && echo "published :8889" || echo "NOT published"
       printf "%-10s " disk;    df -h / | awk "NR==2{print \$4\" free of \"\$2}"

@@ -26,6 +26,8 @@ DeepSeek Harness (`dsh`) or self-hosted LLM setups.
 | `clients/dsh/studio-guard.mjs` | dsh guard: denies agent commands that stop, kill or restart anything on the server |
 | `skills/mac-studio/` | Claude Code skill (plus SSH helper) for managing the server from a laptop |
 | `image-server/` | On-demand Qwen-Image 2.1 API (mflux/MLX); loads the model per request and unloads when idle |
+| `music-server/` | On-demand ACE-Step 1.5 music API (MIT): starts the ACE-Step server per request and stops it when idle |
+| `clients/dsh/music-generate.mjs` | dsh `generate_music` tool: calls `music-server`, saves audio into the session's workspace |
 | `install.sh`, `install.env.example` | Installs everything under `clients/` and `skills/` on a client machine |
 
 The server side (this stack) and the client side (the laptop running the
@@ -269,6 +271,51 @@ Face cache. On a 64 GB Mac, don't run bf16 alongside a local LLM server; 8-bit
 leaves room for one. The weights are under the
 [Qwen Research License](https://huggingface.co/Qwen/Qwen-Image-2.1), so check
 its terms before any commercial use.
+
+## On-demand music generation (`music-server/`)
+
+Original music from a text prompt, with optional lyrics, using
+[ACE-Step 1.5](https://github.com/ace-step/ACE-Step-1.5). It's **MIT-licensed**
+and trained on licensed, royalty-free and synthetic data, so the output can be
+used commercially, e.g. soundtracks for short-form video. (YuE2 scores
+higher, but it's CC-BY-NC, non-commercial only.)
+
+ACE-Step's own API server keeps its models resident and has no unload, so
+`music-server` **supervises** it. The first request starts `acestep-api`
+(with the MLX LM backend, as ACE-Step's macOS launcher does) as a child process.
+The server submits the job, polls it and saves the audio, and **stops the child
+after 10 idle minutes**, which returns all of its memory. When idle the service
+uses about 50 MB.
+
+```sh
+# one-time: install ACE-Step itself (≈10 GB of models download on first use)
+git clone https://github.com/ace-step/ACE-Step-1.5.git ~/ace-step && (cd ~/ace-step && uv sync --python 3.12)
+# if the model download crawls, fetch it without Xet:
+HF_HUB_DISABLE_XET=1 uvx --from huggingface_hub hf download ACE-Step/Ace-Step1.5 --local-dir ~/ace-step/checkpoints
+
+cd ~/searxng-stack/music-server
+./music-server.sh install     # LaunchAgent + tailscale serve on :8891
+./music-server.sh test        # a 20 s instrumental
+```
+
+```sh
+curl http://<machine>.<tailnet>.ts.net:8891/v1/music/generations \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt": "upbeat corporate pop, bright synths, punchy drums, for a 30s product reel", "instrumental": true, "duration": 30}'
+```
+
+| Field | Default | Notes |
+|---|---|---|
+| `prompt` | — | genre, mood, instruments, use |
+| `lyrics` / `instrumental` | none / false | lyrics use `[Verse]`, `[Chorus]`, … tags; no lyrics means instrumental |
+| `duration` | 30 | 10–600 seconds |
+| `bpm`, `key`, `time_signature`, `language` | model decides / `en` | optional control |
+| `seed`, `steps` (8), `thinking` (true, the LM plans the song first) | | |
+| `format` | `mp3` | or `wav`, `flac`; served from `/music/<name>`, kept 14 days |
+
+**In dsh:** the installer adds a `generate_music` tool, which saves into
+`generated-music/` in the session's workspace. `studio-guard` also stops agents
+from restarting or stopping `music-server`.
 
 ## Security notes
 

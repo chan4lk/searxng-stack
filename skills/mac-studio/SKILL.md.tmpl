@@ -84,39 +84,55 @@ Loading the model takes a while, so check `curl -s http://__SERVER_IP__:8000/v1/
 ### image-server
 
 When idle it uses about 100 MB. The first request loads the model, which takes
-a minute or more. It unloads after 10 idle minutes (`IMAGE_IDLE_UNLOAD`). A
-request can pass `"quantize"` as 0 (bf16), 4 or 8; the default is 8. Requests
-run one at a time, and after 4 are waiting, new ones get `429`.
+a minute or more. It unloads after 10 idle minutes (`IMAGE_IDLE_UNLOAD`). Only
+one variant is loaded at a time: `edit` serves generations, transparent output
+and edits; `img2img` loads only for `image` + `strength` variations and swaps
+`edit` out. Requests run one at a time, and after 4 are waiting, new ones get
+`429`. mflux is pinned to commit acdfc98 (reference editing isn't in a release
+yet).
 
-| Setting | Per the mflux docs (M5 Max benchmark) |
-|---|---|
-| bf16 (`quantize` 0) | Peak ~46 GB; ~78 s for 1024², 40 steps |
-| 8-bit | Less memory; the 17.5 GB text encoder always stays bf16 |
+| Task | Endpoint | Body |
+|---|---|---|
+| Generate | `/v1/images/generations` | `prompt`, `size` (multiples of 32), `steps`, `seed`, `transparent` |
+| Variation | `/v1/images/generations` | plus `image` (base64/data URL), `strength` 0.05–0.95 (higher = more change) |
+| Edit / merge / restyle | `/v1/images/edits` | `images` (1–10, base64/data URL), `prompt` naming "image 1", "image 2"…, `output_resolution` (512 is fast), optional `size` |
 
-**Memory with Splash:** bf16 doesn't fit next to Splash. Before a bf16 run,
-check free memory, or ask the user to stop Splash first. Free memory
-immediately with `image-server.sh unload`. The service writes PNGs to
-`~/image-server-outputs` and deletes them after 7 days.
+At 512×512 in 8-bit: generate ~20 s, 2-image merge ~47 s, restyle ~12 s,
+transparent ~37 s. For a style change, `edit` with "repaint image 1 as …" works
+far better than `strength`, which barely restyles.
 
-```bash
-curl -s http://__SERVER_NAME__.__TAILNET__:8890/v1/images/generations -H 'Content-Type: application/json' \
-  -d '{"prompt":"...","size":"1024x1024","steps":40,"response_format":"url"}'
-```
+**Before `restart`, `stop` or `install`**, check `/health`. The script refuses
+while `busy` or `queued` is set, because a restart cuts off whoever is
+generating. Use `FORCE=1` only if the user agrees.
 
-**From dsh:** `dsh-splash` has a `generate_image` tool, from the plugin
-`~/.dsh/plugins/image-generate.mjs`. It saves PNGs into the session's workspace
-(default `generated-images/`, or a `filename` relative to the workspace) and
-refuses any path outside it. It finds the server through `config.url` on its
-entry in `~/.dsh/splash.patch.yml`, which `$IMAGE_SERVER_URL` overrides.
-`searxng-search` works the same way. If a tool reports `unreachable at
-http://127.0.0.1:…`, neither value reached it: re-run `./install.sh` and
-restart dsh. The chat UI only draws images on `read_image`'s own card,
-so when the current model accepts images, the tool's result tells the agent
-to call `read_image` on the saved file. That shows the image in the chat and
-lets the model check it. Only the 35B-A3B entry declares image input
-(`input: [text, image]` in `splash.settings.yaml`). On the 27B the image is
-saved but not shown. If the tool reports that the image server is unreachable,
-check `image-server.sh status` on the Studio.
+**Memory guardrails:** before loading, the server checks available memory
+against the variant's peak plus 4 GB of headroom. If memory is short, it
+steps down bf16 → 8-bit → 4-bit. If even 4-bit doesn't fit, it returns
+**503** with the numbers. The response's `quantize` says what was actually
+used. Measured peaks are saved in `~/.image-server-peaks.json` (8-bit edit:
+~21 GB at 512², ~30 GB at 1024²). `/health` → `memory` shows available GB and
+the peaks. On a 503, don't retry blindly: tell the user what's using memory
+(usually Splash). Free the image model's memory immediately with
+`image-server.sh unload`. The service
+writes PNGs to `~/image-server-outputs` and deletes them after 7 days.
+
+**From dsh:** the plugin `~/.dsh/plugins/image-generate.mjs` adds two tools:
+- `generate_image`: `prompt`, `size`, `steps`, `transparent`, and
+  `init_image` + `strength` for variations.
+- `edit_image`: `images` (1–10 workspace paths), `prompt`, `detail`
+  (low/medium/high), and optional `size`.
+
+Both save PNGs into the session's workspace (default `generated-images/`, or a
+`filename` relative to the workspace), and refuse any input or output path
+outside it. They find the server through `config.url` on their entry in
+`~/.dsh/splash.patch.yml`, which `$IMAGE_SERVER_URL` overrides; `searxng-search`
+works the same way. If a tool reports `unreachable at http://127.0.0.1:…`,
+neither value reached it: re-run `./install.sh` and restart dsh.
+
+The chat UI only draws images on `read_image`'s own card, so when the current
+model accepts images, the result tells the agent to call `read_image` on the
+saved file. Only the 35B-A3B entry declares image input (`input: [text, image]`
+in `splash.settings.yaml`); on the 27B the image is saved but not shown.
 
 ## Common mistakes
 

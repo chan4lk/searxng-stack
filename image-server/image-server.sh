@@ -11,7 +11,9 @@
 # The service idles at ~100 MB: the model loads on the first request and
 # unloads after IMAGE_IDLE_UNLOAD seconds (default 600) without work.
 # Env overrides (read at install): IMAGE_PORT (8890), IMAGE_QUANTIZE (8; 0 = bf16),
-# IMAGE_IDLE_UNLOAD (600), TS_SERVE_PROTO (http|https).
+# IMAGE_IDLE_UNLOAD (600), IMAGE_MEMORY_HEADROOM_GB (4), IMAGE_MEMORY_LIMIT_GB (32),
+# IMAGE_CACHE_LIMIT_GB (2), IMAGE_AUTO_DOWNGRADE (1), TS_SERVE_PROTO (http|https). stop/restart/install refuse
+# while a generation is running or queued; FORCE=1 overrides.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -60,6 +62,10 @@ write_plist() {
     <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     <key>IMAGE_QUANTIZE</key><string>${IMAGE_QUANTIZE:-8}</string>
     <key>IMAGE_IDLE_UNLOAD</key><string>${IMAGE_IDLE_UNLOAD:-600}</string>
+    <key>IMAGE_MEMORY_LIMIT_GB</key><string>${IMAGE_MEMORY_LIMIT_GB:-32}</string>
+    <key>IMAGE_CACHE_LIMIT_GB</key><string>${IMAGE_CACHE_LIMIT_GB:-2}</string>
+    <key>IMAGE_MEMORY_HEADROOM_GB</key><string>${IMAGE_MEMORY_HEADROOM_GB:-4}</string>
+    <key>IMAGE_AUTO_DOWNGRADE</key><string>${IMAGE_AUTO_DOWNGRADE:-1}</string>
   </dict>
   <key>WorkingDirectory</key><string>${DIR}</string>
   <key>RunAtLoad</key><true/>
@@ -73,11 +79,23 @@ EOF
 }
 
 wait_up() {
-  for _ in $(seq 1 60); do curl -fsS -m 2 "$LOCAL_URL/health" >/dev/null 2>&1 && return; sleep 1; done
+  # The first launch after a dependency change runs uv sync, which can take a while.
+  for _ in $(seq 1 180); do curl -fsS -m 2 "$LOCAL_URL/health" >/dev/null 2>&1 && return; sleep 1; done
   tail -30 "$LOG"; die "service did not come up on $LOCAL_URL"
 }
 
 start()  { launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || launchctl kickstart -k "$DOMAIN/$LABEL"; wait_up; }
+# Refuse to take the service down under a running or queued generation: the
+# client's request would be cut off. FORCE=1 overrides.
+ensure_idle() {
+  [[ ${FORCE:-0} == 1 ]] && return 0
+  local h; h="$(curl -s -m 3 "$LOCAL_URL/health" 2>/dev/null)" || return 0
+  [[ -z $h ]] && return 0
+  if python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d.get("busy") or d.get("queued") else 1)' "$h"; then
+    die "a generation is running or queued; retry when idle (./image-server.sh status) or use FORCE=1"
+  fi
+}
+
 # bootout returns before the process exits; wait until the port is free so a
 # following start can't be fooled by the old server still answering /health.
 stop() {
@@ -94,13 +112,13 @@ unserve(){ "$(tailscale_bin)" serve "--${PROTO}=${PORT}" off 2>/dev/null || true
 case "${1:-}" in
   install)
     log "installing dependencies (uv sync)"; uv sync --quiet
-    log "installing LaunchAgent $LABEL"; stop; write_plist; start
+    log "installing LaunchAgent $LABEL"; ensure_idle; stop; write_plist; start
     serve; curl -s "$LOCAL_URL/health"; echo ;;
   uninstall)
-    unserve; stop; rm -f "$PLIST"; log "removed $LABEL" ;;
+    ensure_idle; unserve; stop; rm -f "$PLIST"; log "removed $LABEL" ;;
   start) start; curl -s "$LOCAL_URL/health"; echo ;;
-  stop) stop ;;
-  restart) stop; start ;;
+  stop) ensure_idle; stop ;;
+  restart) ensure_idle; stop; start ;;
   status)
     launchctl print "$DOMAIN/$LABEL" 2>/dev/null | grep -E '^\s+(state|pid|last exit code) =' || echo "not running"
     curl -s -m 3 "$LOCAL_URL/health" && echo

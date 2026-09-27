@@ -20,7 +20,7 @@ DeepSeek Harness (`dsh`) or self-hosted LLM setups.
 | `searxng.sh` | Starts the Docker runtime and the stack, publishes it with `tailscale serve`, and runs test searches |
 | `clients/dsh/searxng-search.mjs` | `web_search` provider plugin for DeepSeek Harness |
 | `clients/dsh/cwd-workspace.mjs` | dsh plugin that opens the web UI in the directory you launched it from |
-| `clients/dsh/image-generate.mjs` | dsh `generate_image` tool: calls `image-server`, saves the PNG into the session's workspace |
+| `clients/dsh/image-generate.mjs` | dsh `generate_image` and `edit_image` tools: call `image-server`, save PNGs into the session's workspace |
 | `clients/dsh/splash.*.tmpl` | dsh settings and overlay: Splash models + SearXNG search |
 | `clients/claude-code/splash-settings.json.tmpl` | Claude Code settings for a Splash server |
 | `skills/mac-studio/` | Claude Code skill (plus SSH helper) for managing the server from a laptop |
@@ -153,7 +153,7 @@ Running it again is safe: files already up to date are left alone. It installs:
 | `~/.claude/splash-settings.json` + alias `claude-splash` | Claude Code using Splash as its model |
 | `~/.claude/skills/<SERVER_NAME>/` | A skill for checking, restarting and deploying things on the server |
 | `~/.dsh/splash.settings.yaml`, `~/.dsh/splash.patch.yml` + alias `dsh-splash` | dsh on Splash (both models listed), with search through SearXNG, web fetch, and image generation |
-| `~/.dsh/plugins/*.mjs` | The dsh plugins: SearXNG search, launch-folder workspace, and `generate_image` |
+| `~/.dsh/plugins/*.mjs` | The dsh plugins: SearXNG search, launch-folder workspace, and the image tools |
 
 Then check it:
 
@@ -184,37 +184,76 @@ cd ~/searxng-stack/image-server
 ./image-server.sh test        # one 512x512 image (the first call also loads the model)
 ```
 
-```sh
-curl http://<machine>.<tailnet>.ts.net:8890/v1/images/generations \
-  -H 'Content-Type: application/json' \
-  -d '{"prompt": "a red fox in fresh snow, golden hour", "size": "1024x1024", "steps": 40}'
-```
+### Capabilities
 
-| Field | Default | Notes |
+| Capability | Endpoint | Key fields |
 |---|---|---|
-| `prompt` | — | required |
-| `size` | `1024x1024` | multiples of 16, 256–2048 |
-| `n` | 1 | up to 4 images, with consecutive seeds |
-| `steps` | 40 | the model's recommended default |
-| `guidance` / `negative_prompt` | 1.0 / none | true CFG runs only with guidance > 1 **and** a negative prompt |
-| `seed` | random | returned per image |
-| `quantize` | 8 | `0` = bf16 (best quality, ~46 GB peak), `4`, `8`; switching reloads the model |
-| `response_format` | `b64_json` | or `url` (served from `/images/<name>`, kept 7 days) |
+| Text-to-image | `POST /v1/images/generations` | `prompt`, `size` |
+| Transparent (RGBA) output | both | `"transparent": true` for stickers, icons and cut-outs |
+| Edit one image by instruction | `POST /v1/images/edits` | `images: [one]`, `prompt: "Change the jacket to green, keep the face"` |
+| **Combine / merge up to 10 images** | `POST /v1/images/edits` | `images: [a, b, …]`, `prompt: "Place the subject from image 1 in the setting of image 2"` |
+| Restyle (keep composition) | `POST /v1/images/edits` | `prompt: "Repaint image 1 as a watercolor painting, keep the composition"` |
+| Close variation of an image | `POST /v1/images/generations` | `image` + `strength` (0.05 = barely changed, 0.95 = almost fully redrawn) |
 
-Other endpoints: `GET /health`, `GET /v1/models`, `POST /v1/load`, `POST /v1/unload`.
+Images are sent as base64 strings or `data:` URLs. In edit prompts, refer to
+them as "image 1", "image 2", … in the order given. Without `size`, an edit's
+output follows the last image's aspect ratio, and `output_resolution` (default
+1024; 512 is faster) sets the pixel budget. Sizes must be multiples of 32.
 
-**In dsh:** the installer adds a `generate_image` tool, so you can just ask the
-agent ("make a 1024x768 hero image of … and save it as assets/hero.png"). It
-saves PNGs inside the session's workspace (by default in `generated-images/`),
-refuses paths outside it, and allows 15 minutes per call to cover the first
-model load.
+Common fields: `n` (1–4, consecutive seeds), `steps` (default 40), `seed`,
+`guidance` / `negative_prompt` (true CFG runs only with guidance > 1 **and** a
+negative prompt), `quantize` (`8` default, `4`, or `0` = bf16), and
+`response_format` (`b64_json`, or `url` served from `/images/<name>` and kept 7 days).
 
-To show the image in the chat, the tool's result asks the agent to open the
-file with `read_image`, whose card is the only one the dsh UI draws images
-on. This happens only when the session's model accepts images, meaning its
-settings entry has `input: [text, image]`. The template sets that for
-`Qwen3.6-35B-A3B-Splash`, which was checked against a real image.
+Other endpoints: `GET /health`, `GET /v1/models`, `POST /v1/load?variant=edit|img2img`, `POST /v1/unload`.
 Requests run one at a time; more than 4 waiting returns `429`.
+
+### Memory guardrails
+
+This matters most on a Mac shared with a local LLM server.
+
+- **Pre-load check:** before loading, the server compares what macOS reports
+  as available with the variant's expected peak plus `IMAGE_MEMORY_HEADROOM_GB`
+  (default 4). If memory is short, it steps down bf16 → 8-bit → 4-bit
+  (`IMAGE_AUTO_DOWNGRADE=1`, the default). If even 4-bit doesn't fit, it
+  answers **503** with the numbers, and the response's `quantize` shows what
+  was actually used.
+- **Pre-generation check:** before each image, it confirms there's room for the
+  generation's working memory on top of the loaded weights. Otherwise it
+  answers 503.
+- **Measured peaks:** each response reports `peak_memory_gb`, and the largest
+  peak per variant is saved to `~/.image-server-peaks.json`. The check uses it
+  instead of the built-in estimates, and it persists across restarts. For
+  reference, 8-bit edit peaks at ~21 GB at 512² and ~30 GB at 1024².
+- **MLX limits:** `IMAGE_MEMORY_LIMIT_GB` (default 32) and
+  `IMAGE_CACHE_LIMIT_GB` (default 2), and the cache is cleared after every job.
+  MLX treats the memory limit as a guideline that only fails once RAM and swap
+  are exhausted, so the pre-checks above are the real guard.
+
+`GET /health` includes a `memory` section: available GB, limits, and observed peaks.
+`image-server.sh stop|restart|install` also refuses to run while a generation
+is running or queued (`FORCE=1` overrides), so a restart can't cut off a request.
+
+**Tested at 512×512, 8-bit:** text-to-image took ~20 s, a two-image merge ~47 s,
+a watercolor restyle ~12 s, and a transparent sticker ~37 s. Only one model
+variant is kept in memory at a time. `edit` handles everything except
+strength-based variations, which load `img2img` and swap `edit` out, so mixing
+the two adds a reload.
+
+Reference editing, transparent output and prompt caching need an mflux build
+newer than 0.20.0. `pyproject.toml` pins the commit that added them
+(filipstrand/mflux#741). Switch back to a release once one includes them.
+
+**In dsh:** the installer adds two tools, `generate_image` (text-to-image,
+`transparent`, `init_image` + `strength`) and `edit_image` (1–10 workspace
+images plus an instruction, `detail` low/medium/high). Just ask the agent,
+for example "put the logo from brand.png on the mug in mug.jpg and save it as
+assets/mug.png". Results are saved inside the session's workspace (by
+default in `generated-images/`), and paths outside it are refused. When the
+session's model accepts images (`input: [text, image]` in its settings entry;
+the template sets this for `Qwen3.6-35B-A3B-Splash`), the result asks the agent
+to open the file with `read_image`. That card is the only one the dsh UI draws
+images on.
 
 The first run downloads `Qwen/Qwen-Image-2.1`, about 33 GB, into the Hugging
 Face cache. On a 64 GB Mac, don't run bf16 alongside a local LLM server; 8-bit

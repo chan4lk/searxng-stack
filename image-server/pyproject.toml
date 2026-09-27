@@ -4,9 +4,10 @@ version = "0.1.0"
 description = "On-demand Qwen-Image 2.1 (mflux/MLX) behind an OpenAI-style images API"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "mflux==0.20.0",
+    "mflux @ git+https://github.com/filipstrand/mflux@acdfc98ba76893afe055b85ee39590cc966a9d43",  # reference editing (PR #741), not yet in a release
     "fastapi>=0.115",
     "uvicorn>=0.30",
+    "psutil>=6",
 ]
 
 [tool.uv]

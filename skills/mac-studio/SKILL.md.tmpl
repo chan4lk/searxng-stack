@@ -134,8 +134,20 @@ model accepts images, the result tells the agent to call `read_image` on the
 saved file. Only the 35B-A3B entry declares image input (`input: [text, image]`
 in `splash.settings.yaml`); on the 27B the image is saved but not shown.
 
+### studio-guard (dsh)
+
+`~/.dsh/plugins/studio-guard.mjs` denies any dsh tool call that reaches this
+server (`ssh`, `scp` or `tailscale ssh` to its IP or name, or `studio.sh run`)
+and contains a stop, kill or restart verb: `kill`/`pkill`/`killall`, `launchctl`
+bootout/stop, `shutdown`/`reboot`, `colima stop`, `docker … down/stop/kill/rm`,
+`image-server.sh stop/restart/unload`, `searxng.sh down`, `tailscale down`,
+`rm -r`, or `/v1/unload`. Read-only checks pass. It was added after a dsh agent
+ran `pkill -f splash` to free memory for an image job. It covers dsh agents
+only: in Claude Code, the 'ask first' rules below still apply.
+
 ## Common mistakes
 
+- **Freeing memory by stopping something.** An image-server 503 means: report the numbers to the user and stop. Never kill Splash or the user's own jobs (e.g. an OCR `llama-server`) to make room.
 - **Deleting or overwriting files, or stopping services, without asking.** The Studio is shared infrastructure, so confirm these first. Read-only checks such as `health`, `status` and `logs` are fine without asking.
 - **Trusting `brew services list`.** It can show Colima as `stopped` while the VM is running. Check with `colima status`.
 - **Installing packages.** Use `HOMEBREW_NO_AUTO_UPDATE=1 NONINTERACTIVE=1 brew install …`. A `brew install` that waits for input hangs the SSH session.

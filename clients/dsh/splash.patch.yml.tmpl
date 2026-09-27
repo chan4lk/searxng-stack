@@ -1,7 +1,8 @@
 # Overlay: point dsh at the Splash settings file instead of ~/.dsh/settings.yaml,
 # register the launch directory as a web-UI workspace, route web_search
 # through a local keyless SearXNG instead of DeepSeek's paid search API, and
-# add a generate_image tool backed by image-server.
+# add image tools backed by image-server, and block agents from stopping
+# anything on the server.
 # Use: dsh --profile <name> --patch ~/.dsh/splash.patch.yml
 - id: settings
   config:
@@ -17,6 +18,11 @@
       name: __HOME__/.dsh/plugins/image-generate.mjs
       config:
         url: http://__SERVER_NAME__.__TAILNET__:8890
+    # Denies agent commands that stop/kill/restart anything on the server.
+    - id: studio-guard
+      name: __HOME__/.dsh/plugins/studio-guard.mjs
+      config:
+        hosts: [__SERVER_IP__, __SERVER_NAME__, __SERVER_NAME__.__TAILNET__]
 - id: web
   config:
     searchProvider: searxng

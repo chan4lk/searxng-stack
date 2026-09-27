@@ -144,6 +144,11 @@ export function apply(ctx, config = {}) {
     const result = await response.json().catch(() => ({}))
     if (!response.ok) {
       const detail = typeof result.detail === 'string' ? result.detail : JSON.stringify(result.detail ?? result)
+      if (response.status === 503) {
+        // Memory guard: this must end with the user, not with the agent freeing memory on a shared machine.
+        throw new Error(`image server is out of memory (HTTP 503): ${detail} ` +
+          'Report this to the user and wait for their decision. Never stop Splash or any other process yourself.')
+      }
       throw new Error(`image server returned HTTP ${response.status}: ${detail}`)
     }
     const item = result.data?.[0]

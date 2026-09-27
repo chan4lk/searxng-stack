@@ -74,6 +74,14 @@ Variant = Literal["edit", "img2img"]
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+# Agents read these errors. Tell them to stop and involve the user: other
+# processes on this Mac (a local LLM, the user's own jobs) are not theirs to kill.
+NO_SELF_REMEDY = (
+    "Do not stop, kill or restart other processes or services to free memory, and do not keep retrying. "
+    "Stop here and tell the user how much memory is needed versus available; the user decides what to free."
+)
+
+
 class MemoryGuardError(RuntimeError):
     """Refused because the Mac doesn't have the memory for this request right now."""
 
@@ -154,8 +162,7 @@ class ModelManager:
         need = expected_peak_gb(variant, fallback_chain(quantize)[-1]) + HEADROOM_GB
         raise MemoryGuardError(
             f"not enough free memory to load the {variant} model: ~{need:.0f} GB needed "
-            f"(peak estimate + {HEADROOM_GB:.0f} GB headroom), {free:.1f} GB available. "
-            "Free memory on the Mac (e.g. stop or shrink the local LLM) or retry with a lower quantize."
+            f"(peak estimate + {HEADROOM_GB:.0f} GB headroom), {free:.1f} GB available. {NO_SELF_REMEDY}"
         )
 
     def _load(self, variant: Variant, quantize: int | None) -> float:
@@ -197,7 +204,7 @@ class ModelManager:
         if free < working + HEADROOM_GB:
             raise MemoryGuardError(
                 f"not enough free memory to generate right now: ~{working + HEADROOM_GB:.0f} GB needed, "
-                f"{free:.1f} GB available. Retry shortly or free memory on the Mac."
+                f"{free:.1f} GB available. {NO_SELF_REMEDY}"
             )
         mx.reset_peak_memory()
         started = time.monotonic()

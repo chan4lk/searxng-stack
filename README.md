@@ -23,6 +23,7 @@ DeepSeek Harness (`dsh`) or self-hosted LLM setups.
 | `clients/dsh/image-generate.mjs` | dsh `generate_image` and `edit_image` tools: call `image-server`, save PNGs into the session's workspace |
 | `clients/dsh/splash.*.tmpl` | dsh settings and overlay: Splash models + SearXNG search |
 | `clients/claude-code/splash-settings.json.tmpl` | Claude Code settings for a Splash server |
+| `clients/dsh/studio-guard.mjs` | dsh guard: denies agent commands that stop, kill or restart anything on the server |
 | `skills/mac-studio/` | Claude Code skill (plus SSH helper) for managing the server from a laptop |
 | `image-server/` | On-demand Qwen-Image 2.1 API (mflux/MLX); loads the model per request and unloads when idle |
 | `install.sh`, `install.env.example` | Installs everything under `clients/` and `skills/` on a client machine |
@@ -262,6 +263,13 @@ leaves room for one. The weights are under the
 its terms before any commercial use.
 
 ## Security notes
+
+- **Agents can't take the server down from dsh.** `studio-guard` hooks dsh's
+  `tools/pre-execute`. It denies any tool call that reaches the server (ssh, scp
+  or tailscale ssh to its IP or name) and contains a stop, kill or restart verb:
+  `pkill`, `launchctl bootout`, `docker … down`, `image-server.sh restart`, and
+  so on. Read-only checks still run. The image server's 503 message also tells
+  agents to report to the user instead of freeing memory themselves.
 
 - The bot limiter is off because agent traffic would trip it. That's only
   acceptable because the service is never exposed publicly: it's bound to

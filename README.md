@@ -94,6 +94,8 @@ sometimes `publishedDate`.
    - insert:
        - id: searxng-search
          name: /Users/<you>/.dsh/plugins/searxng-search.mjs   # must be a literal absolute path
+         config:
+           url: http://<machine>.<tailnet>.ts.net:8889         # or set $SEARXNG_URL
    - id: web
      config:
        searchProvider: searxng
@@ -101,8 +103,9 @@ sometimes `publishedDate`.
    ```
 3. Run dsh with the overlay:
    ```sh
-   SEARXNG_URL=http://<machine>.<tailnet>.ts.net:8889 dsh --profile web --patch ~/.dsh/searxng.patch.yml
+   dsh --profile web --patch ~/.dsh/searxng.patch.yml
    ```
+   The plugin uses `$SEARXNG_URL` if it's set, otherwise `config.url`, otherwise `http://127.0.0.1:8889`.
 
 ## Replicating the full setup
 

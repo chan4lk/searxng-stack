@@ -1,12 +1,13 @@
 // web_search provider backed by a SearXNG instance (no API key).
 // Point it at the stack: local http://127.0.0.1:8889 or the tailnet URL from searxng.sh.
-// Override the endpoint with $SEARXNG_URL.
+// Endpoint: $SEARXNG_URL, else the loader entry's `config.url`, else localhost.
 export const name = 'searxng-search'
 export const inject = ['web']
 
-const BASE_URL = (process.env.SEARXNG_URL ?? 'http://127.0.0.1:8889').replace(/\/+$/, '')
+const DEFAULT_URL = 'http://127.0.0.1:8889'
 
-export function apply(ctx) {
+export function apply(ctx, config = {}) {
+  const BASE_URL = (process.env.SEARXNG_URL ?? config.url ?? DEFAULT_URL).replace(/\/+$/, '')
   ctx.web.registerSearchProvider({
     id: 'searxng',
     available: () => true,

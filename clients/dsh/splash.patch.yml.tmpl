@@ -11,8 +11,12 @@
       name: __HOME__/.dsh/plugins/cwd-workspace.mjs
     - id: searxng-search
       name: __HOME__/.dsh/plugins/searxng-search.mjs
+      config:
+        url: http://__SERVER_NAME__.__TAILNET__:8889
     - id: image-generate
       name: __HOME__/.dsh/plugins/image-generate.mjs
+      config:
+        url: http://__SERVER_NAME__.__TAILNET__:8890
 - id: web
   config:
     searchProvider: searxng

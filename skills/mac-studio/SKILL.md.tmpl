@@ -106,8 +106,11 @@ curl -s http://__SERVER_NAME__.__TAILNET__:8890/v1/images/generations -H 'Conten
 **From dsh:** `dsh-splash` has a `generate_image` tool, from the plugin
 `~/.dsh/plugins/image-generate.mjs`. It saves PNGs into the session's workspace
 (default `generated-images/`, or a `filename` relative to the workspace) and
-refuses any path outside it. The alias points it at the server with
-`IMAGE_SERVER_URL`. The chat UI only draws images on `read_image`'s own card,
+refuses any path outside it. It finds the server through `config.url` on its
+entry in `~/.dsh/splash.patch.yml`, which `$IMAGE_SERVER_URL` overrides.
+`searxng-search` works the same way. If a tool reports `unreachable at
+http://127.0.0.1:…`, neither value reached it: re-run `./install.sh` and
+restart dsh. The chat UI only draws images on `read_image`'s own card,
 so when the current model accepts images, the tool's result tells the agent
 to call `read_image` on the saved file. That shows the image in the chat and
 lets the model check it. Only the 35B-A3B entry declares image input

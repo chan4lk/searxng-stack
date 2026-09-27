@@ -2,7 +2,7 @@
 // image-server (Qwen-Image 2.1 via mflux). The PNG is saved into the session's
 // workspace (generated-images/ unless a filename is given) and the tool
 // returns its path, so the agent can reference or post-process the file.
-// Override the endpoint with $IMAGE_SERVER_URL.
+// Endpoint: $IMAGE_SERVER_URL, else the loader entry's `config.url`, else localhost.
 import { mkdir, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
@@ -17,7 +17,7 @@ const { defineTool } = await import(pathToFileURL(createRequire(profiles).resolv
 export const name = 'image-generate'
 export const inject = ['tools']
 
-const BASE_URL = (process.env.IMAGE_SERVER_URL ?? 'http://127.0.0.1:8890').replace(/\/+$/, '')
+const DEFAULT_URL = 'http://127.0.0.1:8890'
 const SIZES = ['512x512', '768x768', '1024x1024', '1024x768', '768x1024', '1280x720', '720x1280', '1536x1024', '1024x1536']
 // First use loads the model (can take minutes), then 1024², 40 steps is ~80-130 s.
 const TIMEOUT_MS = 15 * 60 * 1000
@@ -52,7 +52,8 @@ function outputPath(workspace, filename, prompt) {
   return target
 }
 
-export function apply(ctx) {
+export function apply(ctx, config = {}) {
+  const BASE_URL = (process.env.IMAGE_SERVER_URL ?? config.url ?? DEFAULT_URL).replace(/\/+$/, '')
   ctx.tools.register(defineTool({
     name: 'generate_image',
     description:

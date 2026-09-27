@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# SSH helper for the Mac Studio on the tailnet.
+#
+#   bash studio.sh run '<command>'   run a command there (Homebrew/Docker on PATH)
+#   bash studio.sh health            one-shot status of Splash, SearXNG, Colima, disk, memory
+#   bash studio.sh copy <src> <dst>  scp a local path to the Studio (dst relative to ~)
+#
+# Tailscale SSH "check mode" can demand a browser sign-in. When it does, this
+# prints the login URL to stderr and keeps waiting (up to STUDIO_AUTH_WAIT
+# seconds, default 300) for the user to approve it, then continues.
+set -uo pipefail
+
+HOST="${STUDIO_HOST:-__SERVER_IP__}"      # MagicDNS: __SERVER_NAME__.__TAILNET__
+USER_NAME="${STUDIO_USER:-__SERVER_USER__}"      # NOT the local username
+WAIT="${STUDIO_AUTH_WAIT:-300}"
+REMOTE_PATH='export PATH=/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:$PATH;'
+RC_TRAILER='; printf "\n__STUDIO_RC=%s\n" "$?"'
+SSH_OPTS=(-o ConnectTimeout=15 -o ServerAliveInterval=30 -o StrictHostKeyChecking=accept-new)
+
+# Run ssh with a watchdog that surfaces the Tailscale check URL instead of hanging silently.
+ssh_watch() {
+  local out err pid url_shown=0 waited=0
+  out="$(mktemp)"; err="$(mktemp)"
+  ssh "${SSH_OPTS[@]}" "$@" >"$out" 2>"$err" </dev/null &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [[ $url_shown == 0 ]] && grep -q 'login.tailscale.com' "$err" "$out" 2>/dev/null; then
+      echo "Tailscale SSH needs approval. Open in the browser profile signed in to the tailnet:" >&2
+      grep -ho 'https://login.tailscale.com/[^[:space:]]*' "$err" "$out" | head -1 >&2
+      url_shown=1
+    fi
+    if (( waited >= WAIT )); then
+      kill "$pid" 2>/dev/null
+      echo "studio.sh: gave up after ${WAIT}s (approval not completed?)" >&2
+      rm -f "$out" "$err"; return 124
+    fi
+    sleep 1; waited=$((waited + 1))
+  done
+  wait "$pid"; local rc=$?
+  # Tailscale SSH always exits 0, so the remote status travels as a marker line.
+  local marked; marked="$(sed -n 's/^__STUDIO_RC=\([0-9]*\)$/\1/p' "$out" | tail -1)"
+  [[ -n $marked ]] && rc=$marked
+  # Drop the marker and the blank separator line printed just before it.
+  awk '/^__STUDIO_RC=/{next} {if (held) print prev; prev=$0; held=1} END{if (held && prev != "") print prev}' "$out"
+  grep -v -E 'Tailscale SSH requires|To authenticate, visit|Authentication checked' "$err" >&2
+  rm -f "$out" "$err"
+  if [[ $rc == 255 ]]; then
+    echo "studio.sh: ssh failed (rc 255). Check: tailscale status | grep __SERVER_NAME__; user must be ${USER_NAME}." >&2
+  fi
+  return "$rc"
+}
+
+case "${1:-}" in
+  run)
+    shift; [[ $# -gt 0 ]] || { echo "usage: studio.sh run '<command>'" >&2; exit 2; }
+    ssh_watch "${USER_NAME}@${HOST}" "${REMOTE_PATH} ( $*
+)${RC_TRAILER}" ;;
+  health)
+    ssh_watch "${USER_NAME}@${HOST}" "${REMOTE_PATH}"'
+      printf "%-10s " splash;  mid() { curl -s -m 5 "$1/v1/models" | python3 -c "import json,sys; print(json.load(sys.stdin)[\"data\"][0][\"id\"])" 2>/dev/null; }
+      if m=$(mid http://__SERVER_NAME__:8000) && [ -n "$m" ]; then echo "up: $m (tailnet OK)"
+      elif m=$(mid http://127.0.0.1:8000) && [ -n "$m" ]; then echo "up: $m but LOOPBACK ONLY - restart with --host __SERVER_NAME__"
+      else echo DOWN; fi
+      printf "%-10s " searxng; curl -s -m 20 "http://127.0.0.1:8889/search?q=test&format=json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"up:\", len(d[\"results\"]), \"results\")" 2>/dev/null || echo DOWN
+      printf "%-10s " colima;  colima status >/dev/null 2>&1 && echo running || echo STOPPED
+      printf "%-10s " serve;   tailscale serve status 2>/dev/null | grep -q 8889 && echo "published :8889" || echo "NOT published"
+      printf "%-10s " disk;    df -h / | awk "NR==2{print \$4\" free of \"\$2}"
+      printf "%-10s " memory;  memory_pressure 2>/dev/null | awk -F": " "/free percentage/{print \$2\" free\"}"
+      printf "%-10s " uptime;  uptime | sed "s/.*up /up /; s/,.*user.*//"' ;;
+  copy)
+    [[ $# -eq 3 ]] || { echo "usage: studio.sh copy <local-src> <remote-dst>" >&2; exit 2; }
+    scp -r "${SSH_OPTS[@]}" "$2" "${USER_NAME}@${HOST}:$3" ;;
+  *)
+    sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+esac

@@ -1,0 +1,42 @@
+ui-onboarding:
+  welcomeNoticeVersion: 2026-08-13.1
+
+# Splash inference server (incoai/Qwen3.8-27B-Splash) reached as a
+# hand-declared pi-ai route over its OpenAI-compatible /v1 API.
+llm-pi-ai:
+  providers:
+    splash:
+      displayName: Splash
+      api: openai-completions
+      baseURL: http://__SERVER_IP__:8000/v1
+      # Server takes no auth; dsh-splash exports a placeholder value.
+      apiKeyEnv: SPLASH_API_KEY
+      # Measured ~120 tok/s output; generous idle window for long reasoning.
+      streamIdleTimeoutMs: 300000
+      defaultContextWindow: 131072
+      defaultMaxTokens: 16384
+      compat:
+        # Verified: server accepts the developer role and max_tokens.
+        supportsDeveloperRole: true
+        maxTokensField: max_tokens
+      models:
+        - id: incoai/Qwen3.8-27B-Splash
+          name: Qwen3.8 27B Splash
+          # Server reports a 262144-token cache capacity; 131072 stays well
+          # inside it. Raise if the server's max_model_len allows.
+          contextWindow: 131072
+          maxTokens: 16384
+          # Always emits reasoning_content; no selectable effort levels.
+          # Splash serves ONE model at a time: the unloaded one answers
+          # HTTP 404 model_not_found. Switch by restarting `splash serve --model`
+          # on the Studio, then pick the matching model here.
+        - id: incoai/Qwen3.6-35B-A3B-Splash
+          name: Qwen3.6 35B-A3B Splash (MoE)
+          contextWindow: 131072
+          maxTokens: 16384
+          # Also emits reasoning_content, and reasons at length: keep maxTokens
+          # generous or replies can end mid-thought (finish_reason: length).
+
+agent-default-model:
+  provider: splash
+  model: __SPLASH_MODEL__

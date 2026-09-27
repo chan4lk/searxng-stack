@@ -1,0 +1,20 @@
+# Overlay: point dsh at the Splash settings file instead of ~/.dsh/settings.yaml,
+# register the launch directory as a web-UI workspace, and route web_search
+# through a local keyless SearXNG instead of DeepSeek's paid search API.
+# Use: dsh --profile <name> --patch ~/.dsh/splash.patch.yml
+- id: settings
+  config:
+    path: !!js dshHomePath('splash.settings.yaml')
+- insert:
+    - id: cwd-workspace
+      name: __HOME__/.dsh/plugins/cwd-workspace.mjs
+    - id: searxng-search
+      name: __HOME__/.dsh/plugins/searxng-search.mjs
+- id: web
+  config:
+    searchProvider: searxng
+    fetchProvider: http
+- id: tool-web
+  config:
+    fetch: true
+    searchTimeoutMs: 60000

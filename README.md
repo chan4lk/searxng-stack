@@ -18,7 +18,16 @@ DeepSeek Harness (`dsh`) or self-hosted LLM setups.
 | `docker-compose.yml` | SearXNG + Valkey, bound to `127.0.0.1` only |
 | `searxng/settings.yml` | JSON output on, bot limiter off, DuckDuckGo off (see below) |
 | `searxng.sh` | Starts the Docker runtime and the stack, publishes it with `tailscale serve`, and runs test searches |
-| `clients/dsh/searxng-search.mjs` | Example `web_search` provider plugin for DeepSeek Harness |
+| `clients/dsh/searxng-search.mjs` | `web_search` provider plugin for DeepSeek Harness |
+| `clients/dsh/cwd-workspace.mjs` | dsh plugin that opens the web UI in the directory you launched it from |
+| `clients/dsh/splash.*.tmpl` | dsh settings and overlay: Splash models + SearXNG search |
+| `clients/claude-code/splash-settings.json.tmpl` | Claude Code settings for a Splash server |
+| `skills/mac-studio/` | Claude Code skill (plus SSH helper) for managing the server from a laptop |
+| `install.sh`, `install.env.example` | Installs everything under `clients/` and `skills/` on a client machine |
+
+The server side (this stack) and the client side (the laptop running the
+agents) are set up separately. [Replicating the full setup](#replicating-the-full-setup)
+covers both.
 
 ## Requirements
 
@@ -92,6 +101,70 @@ sometimes `publishedDate`.
    ```sh
    SEARXNG_URL=http://<machine>.<tailnet>.ts.net:8889 dsh --profile web --patch ~/.dsh/searxng.patch.yml
    ```
+
+## Replicating the full setup
+
+The full setup has two machines on one tailnet:
+
+- **Server** (e.g. a Mac Studio): runs [Splash](https://github.com/incoai/splash)
+  (`brew install incoai/tap/splash`), which serves a local LLM with OpenAI- and Anthropic-compatible APIs, plus this
+  SearXNG stack.
+- **Client** (e.g. a laptop): runs Claude Code and DeepSeek Harness against
+  that server.
+
+### 1. Server
+
+```sh
+brew install colima docker docker-compose tailscale incoai/tap/splash
+git clone https://github.com/chan4lk/searxng-stack.git ~/searxng-stack
+~/searxng-stack/searxng.sh up
+
+# Splash serves one model at a time. --host must be the machine's tailnet
+# name; the default, 127.0.0.1, isn't reachable from other machines.
+nohup splash serve --host "$(hostname -s | tr A-Z a-z)" --port 8000 \
+  --model incoai/Qwen3.6-35B-A3B-Splash > ~/splash.log 2>&1 &
+```
+
+For the client to manage the server, turn on
+[Tailscale SSH](https://tailscale.com/kb/1193/tailscale-ssh) on the server
+(`tailscale set --ssh`) and allow it in your tailnet policy.
+
+### 2. Client
+
+```sh
+git clone https://github.com/chan4lk/searxng-stack.git && cd searxng-stack
+cp install.env.example install.env    # fill in; the comments say where each value comes from
+./install.sh --dry-run                # preview every file and alias it would write
+./install.sh
+source ~/.zshrc
+```
+
+The installer fills the placeholders in each template with your values. When
+it would change an existing file, it saves a timestamped `.bak-*` copy first.
+Running it again is safe: files already up to date are left alone. It installs:
+
+| Installed | Purpose |
+|---|---|
+| `~/.claude/splash-settings.json` + alias `claude-splash` | Claude Code using Splash as its model |
+| `~/.claude/skills/<SERVER_NAME>/` | A skill for checking, restarting and deploying things on the server |
+| `~/.dsh/splash.settings.yaml`, `~/.dsh/splash.patch.yml` + alias `dsh-splash` | dsh on Splash (both models listed), with search through SearXNG and web fetch |
+| `~/.dsh/plugins/*.mjs` | The two dsh plugins |
+
+Then check it:
+
+```sh
+bash ~/.claude/skills/<SERVER_NAME>/scripts/studio.sh health
+dsh-splash --profile headless "Use web_search to find the SearXNG docs. Reply with the URL."
+claude-splash
+```
+
+The first `studio.sh` call may print a `login.tailscale.com` link. Open it in
+the browser profile signed in to your tailnet to approve SSH access.
+
+**Switching models:** restart `splash serve` on the server with the other
+`--model`, then pick that model in the dsh UI. For `claude-splash`, set
+`SPLASH_MODEL` in `install.env` and re-run `./install.sh`. A request for the
+model that isn't loaded fails with `HTTP 404 model_not_found`.
 
 ## Security notes
 

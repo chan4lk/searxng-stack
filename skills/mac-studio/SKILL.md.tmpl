@@ -1,0 +1,88 @@
+---
+name: __SERVER_NAME__
+description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash (the local Qwen LLM server), or the SearXNG search stack, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
+---
+
+# Managing the Mac Studio
+
+## Overview
+
+The Mac Studio is a headless home server that is reached from this MacBook over
+Tailscale SSH. Run every remote command through the bundled helper. Plain `ssh`
+runs into four problems here:
+
+| Problem with plain ssh | What the helper does |
+|---|---|
+| The login user is `__SERVER_USER__`, not the local `chandima` | Sets the user |
+| `ssh __SERVER_NAME__` doesn't resolve | Uses `__SERVER_IP__` |
+| Tailscale check mode can demand a browser sign-in, and `BatchMode` hides the link | Prints the login URL and waits for approval |
+| Tailscale SSH always exits 0 | Returns the real remote exit code |
+| A non-interactive shell has no Homebrew/Docker on PATH | Adds `/opt/homebrew/bin` to PATH |
+
+```bash
+bash ~/.claude/skills/__SERVER_NAME__/scripts/studio.sh health         # status of everything
+bash ~/.claude/skills/__SERVER_NAME__/scripts/studio.sh run '<cmd>'    # run any command there
+bash ~/.claude/skills/__SERVER_NAME__/scripts/studio.sh copy <src> <dst>
+```
+
+**If the helper prints a `login.tailscale.com` URL**, give it to the user. They
+must open it in the browser profile signed in to the tailnet (`__TAILNET_ACCOUNT__`), not
+their default profile. The helper waits up to 5 minutes. Run the helper in the
+foreground, not in the background, so the URL reaches you.
+
+## Machine
+
+- __SERVER_SPECS__
+- Tailscale address: `__SERVER_IP__`, MagicDNS `__SERVER_NAME__.__TAILNET__`
+
+## Services
+
+| Service | Endpoint | How it runs | Manage |
+|---|---|---|---|
+| **Splash** (Qwen3.8-27B LLM) | `http://__SERVER_IP__:8000` (OpenAI `/v1/chat/completions` and Anthropic `/v1/messages`) | Foreground `splash serve` in a login shell, **not a service** | see below |
+| **SearXNG** + Valkey | `http://__SERVER_NAME__.__TAILNET__:8889` (`/search?q=…&format=json`) | Docker Compose on Colima, published with `tailscale serve` | `~/searxng-stack/searxng.sh up\|down\|restart\|status\|logs\|test` |
+| **Colima** (Docker VM: 2 CPU, 2 GB) | — | `brew services` LaunchAgent, starts at login | `colima status\|start\|stop` |
+| **Ollama** | `127.0.0.1:11434`, local to the Studio only | macOS app | — |
+
+The SearXNG stack is a git checkout of `github.com/chan4lk/searxng-stack`. To
+update it: `cd ~/searxng-stack && git pull && ./searxng.sh restart`. Its `.env`
+holds the instance secret and is git-ignored, so never commit it.
+
+### Splash
+
+Splash serves **one model at a time**. Both of these are downloaded:
+
+| Model | Size on disk |
+|---|---|
+| `incoai/Qwen3.8-27B-Splash` | 16 GB, dense |
+| `incoai/Qwen3.6-35B-A3B-Splash` | 20 GB, mixture of experts |
+
+A request that names the model that isn't loaded gets `HTTP 404 model_not_found`.
+
+It isn't supervised by anything: it doesn't survive a reboot, and killing it
+takes the model offline for every client, including the MacBook's
+`claude-splash` and `dsh-splash`. **Ask the user before stopping, restarting or
+switching Splash's model.**
+
+Check what's loaded and how it was started:
+
+```bash
+studio.sh run 'ps -o command= -p $(lsof -t -iTCP:8000 -sTCP:LISTEN)'
+```
+
+**`--host` matters.** Splash defaults to `127.0.0.1`, which the MacBook can't
+reach. It must run with `--host __SERVER_NAME__` to be reachable over the tailnet.
+To start it or switch model (`MODEL` is one of the two above):
+
+```bash
+studio.sh run 'pkill -f "splash serve|libexec/server/server.py"; sleep 3; nohup splash serve --host __SERVER_NAME__ --port 8000 --model MODEL > ~/splash.log 2>&1 &'
+```
+
+Loading the model takes a while, so check `curl -s http://__SERVER_IP__:8000/v1/models` until it lists the model.
+
+## Common mistakes
+
+- **Deleting or overwriting files, or stopping services, without asking.** The Studio is shared infrastructure, so confirm these first. Read-only checks such as `health`, `status` and `logs` are fine without asking.
+- **Trusting `brew services list`.** It can show Colima as `stopped` while the VM is running. Check with `colima status`.
+- **Installing packages.** Use `HOMEBREW_NO_AUTO_UPDATE=1 NONINTERACTIVE=1 brew install …`. A `brew install` that waits for input hangs the SSH session.
+- **Opening SearXNG to the internet.** Its bot limiter is off because it's reached only from the tailnet. Never bind it to `0.0.0.0` or enable `tailscale funnel`.

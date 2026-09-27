@@ -103,6 +103,13 @@ curl -s http://__SERVER_NAME__.__TAILNET__:8890/v1/images/generations -H 'Conten
   -d '{"prompt":"...","size":"1024x1024","steps":40,"response_format":"url"}'
 ```
 
+**From dsh:** `dsh-splash` has a `generate_image` tool, from the plugin
+`~/.dsh/plugins/image-generate.mjs`. It saves PNGs into the session's workspace
+(default `generated-images/`, or a `filename` relative to the workspace) and
+refuses any path outside it. The alias points it at the server with
+`IMAGE_SERVER_URL`. If the tool reports that the image server is unreachable,
+check `image-server.sh status` on the Studio.
+
 ## Common mistakes
 
 - **Deleting or overwriting files, or stopping services, without asking.** The Studio is shared infrastructure, so confirm these first. Read-only checks such as `health`, `status` and `logs` are fine without asking.

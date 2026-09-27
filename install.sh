@@ -11,7 +11,7 @@
 #   ~/.claude/splash-settings.json                      Claude Code -> Splash
 #   ~/.claude/skills/<SERVER_NAME>/                     server-management skill
 #   ~/.dsh/splash.settings.yaml, ~/.dsh/splash.patch.yml dsh -> Splash + SearXNG
-#   ~/.dsh/plugins/{searxng-search,cwd-workspace}.mjs   dsh plugins
+#   ~/.dsh/plugins/{searxng-search,cwd-workspace,image-generate}.mjs  dsh plugins
 #   aliases claude-splash / dsh-splash in ~/.zshrc
 set -euo pipefail
 
@@ -88,6 +88,7 @@ add_alias() {
 
 SKILL_DIR="$HOME/.claude/skills/$SERVER_NAME"
 SEARXNG_URL="http://${SERVER_NAME}.${TAILNET}:8889"
+IMAGE_SERVER_URL="http://${SERVER_NAME}.${TAILNET}:8890"
 
 (( DRY_RUN )) && echo "Dry run: nothing will be written."
 echo "Claude Code"
@@ -99,9 +100,10 @@ install_file clients/dsh/splash.settings.yaml.tmpl "$HOME/.dsh/splash.settings.y
 install_file clients/dsh/splash.patch.yml.tmpl     "$HOME/.dsh/splash.patch.yml" render
 install_file clients/dsh/searxng-search.mjs        "$HOME/.dsh/plugins/searxng-search.mjs"
 install_file clients/dsh/cwd-workspace.mjs         "$HOME/.dsh/plugins/cwd-workspace.mjs"
+install_file clients/dsh/image-generate.mjs        "$HOME/.dsh/plugins/image-generate.mjs"
 echo "Shell aliases (~/.zshrc)"
 add_alias claude-splash "alias claude-splash='claude --settings ~/.claude/splash-settings.json'"
-add_alias dsh-splash "alias dsh-splash='SPLASH_API_KEY=splash-local SEARXNG_URL=${SEARXNG_URL} dsh --patch ~/.dsh/splash.patch.yml'"
+add_alias dsh-splash "alias dsh-splash='SPLASH_API_KEY=splash-local SEARXNG_URL=${SEARXNG_URL} IMAGE_SERVER_URL=${IMAGE_SERVER_URL} dsh --patch ~/.dsh/splash.patch.yml'"
 
 (( DRY_RUN )) && exit 0
 echo

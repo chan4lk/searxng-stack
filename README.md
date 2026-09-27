@@ -20,6 +20,7 @@ DeepSeek Harness (`dsh`) or self-hosted LLM setups.
 | `searxng.sh` | Starts the Docker runtime and the stack, publishes it with `tailscale serve`, and runs test searches |
 | `clients/dsh/searxng-search.mjs` | `web_search` provider plugin for DeepSeek Harness |
 | `clients/dsh/cwd-workspace.mjs` | dsh plugin that opens the web UI in the directory you launched it from |
+| `clients/dsh/image-generate.mjs` | dsh `generate_image` tool: calls `image-server`, saves the PNG into the session's workspace |
 | `clients/dsh/splash.*.tmpl` | dsh settings and overlay: Splash models + SearXNG search |
 | `clients/claude-code/splash-settings.json.tmpl` | Claude Code settings for a Splash server |
 | `skills/mac-studio/` | Claude Code skill (plus SSH helper) for managing the server from a laptop |
@@ -148,8 +149,8 @@ Running it again is safe: files already up to date are left alone. It installs:
 |---|---|
 | `~/.claude/splash-settings.json` + alias `claude-splash` | Claude Code using Splash as its model |
 | `~/.claude/skills/<SERVER_NAME>/` | A skill for checking, restarting and deploying things on the server |
-| `~/.dsh/splash.settings.yaml`, `~/.dsh/splash.patch.yml` + alias `dsh-splash` | dsh on Splash (both models listed), with search through SearXNG and web fetch |
-| `~/.dsh/plugins/*.mjs` | The two dsh plugins |
+| `~/.dsh/splash.settings.yaml`, `~/.dsh/splash.patch.yml` + alias `dsh-splash` | dsh on Splash (both models listed), with search through SearXNG, web fetch, and image generation |
+| `~/.dsh/plugins/*.mjs` | The dsh plugins: SearXNG search, launch-folder workspace, and `generate_image` |
 
 Then check it:
 
@@ -198,6 +199,12 @@ curl http://<machine>.<tailnet>.ts.net:8890/v1/images/generations \
 | `response_format` | `b64_json` | or `url` (served from `/images/<name>`, kept 7 days) |
 
 Other endpoints: `GET /health`, `GET /v1/models`, `POST /v1/load`, `POST /v1/unload`.
+
+**In dsh:** the installer adds a `generate_image` tool, so you can just ask the
+agent ("make a 1024x768 hero image of … and save it as assets/hero.png"). It
+saves PNGs inside the session's workspace (by default in `generated-images/`),
+refuses paths outside it, and allows 15 minutes per call to cover the first
+model load.
 Requests run one at a time; more than 4 waiting returns `429`.
 
 The first run downloads `Qwen/Qwen-Image-2.1`, about 33 GB, into the Hugging

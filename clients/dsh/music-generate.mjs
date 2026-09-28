@@ -8,6 +8,7 @@ import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { normalizeArgs, registerLenient } from './tool-args.mjs'
 
 // Plugins under ~/.dsh/plugins sit outside dsh's node_modules, so a bare
 // import can't see dsh's own packages. Resolve them from the profiles dir.
@@ -18,20 +19,20 @@ export const name = 'music-generate'
 export const inject = ['tools']
 
 const DEFAULT_URL = 'http://127.0.0.1:8891'
-const FORMATS = ['mp3', 'wav', 'flac']
+const KEY = /^[A-G][#b♯♭]?\s*(m|min|minor|maj|major)?$/i
+const SPEC = {
+  prompt: { type: 'string' },
+  lyrics: { type: 'string', check: (v) => /\[[^\]]+\]/.test(v) || v.trim().split(/\s+/).length >= 3 },
+  instrumental: { type: 'boolean' },
+  duration: { type: 'number', min: 10, max: 600 },
+  bpm: { type: 'integer', min: 30, max: 300 },
+  key: { type: 'string', check: (v) => KEY.test(v) },
+  language: { type: 'string', check: (v) => /^[a-z]{2,3}$/i.test(v) },
+  seed: { type: 'integer' },
+  filename: { type: 'string', check: (v) => /\.mp3$/i.test(v) || !/\.[a-z0-9]{2,4}$/i.test(v) },
+}
 // First use starts ACE-Step (and on a fresh install downloads ~10 GB of models).
 const TIMEOUT_MS = 30 * 60 * 1000
-
-// Local models sometimes emit malformed tool calls that fuse a key and its
-// value ("filename audio/x.mp3": 20). Reject unknown keys loudly so the model
-// retries with proper arguments instead of silently getting defaults.
-function rejectUnknownArgs(args, allowed) {
-  const unknown = Object.keys(args ?? {}).filter((k) => !allowed.includes(k))
-  if (unknown.length) {
-    throw new Error(`unknown argument(s): ${unknown.map((k) => JSON.stringify(k)).join(', ')}. ` +
-      `Valid arguments are: ${allowed.join(', ')}. Pass each as its own JSON field, e.g. {"filename": "audio/track.mp3", "duration": 20}.`)
-  }
-}
 
 function slug(text) {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'track'
@@ -51,7 +52,7 @@ function outputPath(workspace, filename, prompt, format) {
 export function apply(ctx, config = {}) {
   const BASE_URL = (process.env.MUSIC_SERVER_URL ?? config.url ?? DEFAULT_URL).replace(/\/+$/, '')
 
-  ctx.tools.register(defineTool({
+  registerLenient(ctx, defineTool, {
     name: 'generate_music',
     description:
       'Generate an original music track with a local ACE-Step 1.5 model (commercially licensed) and save it in the workspace. ' +
@@ -68,8 +69,7 @@ export function apply(ctx, config = {}) {
       key: { type: 'string', description: 'Key/scale, e.g. "C Major" or "Am". Omit to let the model choose.' },
       language: { type: 'string', description: 'Vocal language code, e.g. en, zh, ja, es. Default en.' },
       seed: { type: 'integer', description: 'Seed for reproducible output. Omit for random.' },
-      format: { type: 'string', enum: FORMATS, description: 'Audio format. Default mp3.' },
-      filename: { type: 'string', description: 'Output path relative to the workspace, e.g. audio/reel-bgm.mp3. Default generated-music/<time>-<prompt>.<format>.' },
+      filename: { type: 'string', description: 'Output path relative to the workspace, e.g. audio/reel-bgm.mp3. Default generated-music/<time>-<prompt>.mp3.' },
     },
     output: {
       schema: {
@@ -83,24 +83,25 @@ export function apply(ctx, config = {}) {
           seconds: { type: 'number', required: true },
           startup_seconds: { type: 'number', required: true },
           metas: { type: 'string', required: true },
+          notes: { type: 'string', required: true },
         },
       },
       render: (_args, v) => [{
         type: 'text',
         text: `Generated a ${v.duration}s track and saved it to ${v.path} (seed ${v.seed}, ${v.seconds}s` +
           (v.startup_seconds > 1 ? `, incl. ${v.startup_seconds}s model startup` : '') +
-          `). Model's metadata: ${v.metas}. Server copy: ${v.url}`,
+          `). Model's metadata: ${v.metas}. Server copy: ${v.url}` +
+          (v.notes ? `\nNote: ${v.notes}. Check the result matches what you intended.` : ''),
       }],
       presentationMeta: (_args, v) => ({ path: v.path }),
     },
     timeoutMs: TIMEOUT_MS,
     isConcurrencySafe: () => false,
-    async execute(args, exec) {
-      rejectUnknownArgs(args, ['prompt', 'lyrics', 'instrumental', 'duration', 'bpm', 'key', 'language', 'seed', 'format', 'filename'])
-      const format = args.format ?? 'mp3'
-      if (!FORMATS.includes(format)) throw new Error(`format must be one of ${FORMATS.join(', ')}`)
+    async execute(rawArgs, exec) {
+      const { args, notes } = normalizeArgs('generate_music', rawArgs, SPEC, exec)
+      if (!args.prompt) throw new Error('prompt is required: describe the style, mood and instruments')
+      const format = 'mp3'
       const duration = args.duration ?? 30
-      if (typeof duration !== 'number' || duration < 10 || duration > 600) throw new Error('duration must be 10-600 seconds')
       const lyrics = (args.lyrics ?? '').trim()
       const instrumental = args.instrumental ?? !lyrics
       const workspace = exec.agent?.session.header.cwd ?? process.cwd()
@@ -144,7 +145,8 @@ export function apply(ctx, config = {}) {
         seconds: result.seconds ?? 0,
         startup_seconds: result.startup_seconds ?? 0,
         metas: JSON.stringify(result.metas ?? {}),
+        notes: notes.join('; '),
       }
     },
-  }))
+  })
 }

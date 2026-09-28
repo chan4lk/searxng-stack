@@ -313,6 +313,14 @@ curl http://<machine>.<tailnet>.ts.net:8891/v1/music/generations \
 | `seed`, `steps` (8), `thinking` (true, the LM plans the song first) | | |
 | `format` | `mp3` | or `wav`, `flac`; served from `/music/<name>`, kept 14 days |
 
+**Malformed tool calls:** local models sometimes fuse argument names with
+values (`formatmp3`, `bpm85`, `"filename audio/x.mp3": 20`). The media tools
+share `clients/dsh/tool-args.mjs`, which repairs and validates such keys. It
+rejects the first malformed call in a session with the corrected JSON, then
+goes ahead with repaired arguments and reports what was fixed, so agents
+don't loop. The tools also accept numbers or booleans sent as strings
+(`"20"`), and check each value themselves.
+
 **In dsh:** the installer adds a `generate_music` tool, which saves into
 `generated-music/` in the session's workspace. `studio-guard` also stops agents
 from restarting or stopping `music-server`.

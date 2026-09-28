@@ -14,6 +14,7 @@ import { createRequire } from 'node:module'
 import { homedir } from 'node:os'
 import { dirname, extname, isAbsolute, join, normalize, relative, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { normalizeArgs, registerLenient } from './tool-args.mjs'
 
 // Plugins under ~/.dsh/plugins sit outside dsh's node_modules, so a bare
 // import can't see dsh's own packages. Resolve them from the profiles dir.
@@ -32,6 +33,29 @@ const MAX_INPUT_BYTES = 25 * 1024 * 1024
 // First use loads the model (can take minutes); a 1024² image is then ~1-2 minutes.
 const TIMEOUT_MS = 15 * 60 * 1000
 
+const PNG_OR_BARE = (v) => /\.png$/i.test(v) || !/\.[a-z0-9]{2,4}$/i.test(v)
+const COMMON_SPEC = {
+  prompt: { type: 'string' },
+  steps: { type: 'integer', min: 10, max: 60 },
+  seed: { type: 'integer' },
+  transparent: { type: 'boolean' },
+  negative_prompt: { type: 'string' },
+  guidance: { type: 'number', min: 1, max: 10 },
+  filename: { type: 'string', check: PNG_OR_BARE },
+}
+const GENERATE_SPEC = {
+  ...COMMON_SPEC,
+  size: { type: 'string', enum: SIZES },
+  init_image: { type: 'string', check: (v) => /\.(png|jpe?g|webp)$/i.test(v) },
+  strength: { type: 'number', min: 0.05, max: 0.95 },
+}
+const EDIT_SPEC = {
+  ...COMMON_SPEC,
+  images: { type: 'array' },
+  size: { type: 'string', enum: SIZES },
+  detail: { type: 'string', enum: ['low', 'medium', 'high'] },
+}
+
 // Same test read_image applies: does the model serving this session accept images?
 async function routeAcceptsImages(ctx, exec) {
   try {
@@ -44,17 +68,6 @@ async function routeAcceptsImages(ctx, exec) {
     return Boolean(info.inputModalities?.includes('image'))
   } catch {
     return false
-  }
-}
-
-// Local models sometimes emit malformed tool calls that fuse a key and its
-// value ("filename audio/x.mp3": 20). Reject unknown keys loudly so the model
-// retries with proper arguments instead of silently getting defaults.
-function rejectUnknownArgs(args, allowed) {
-  const unknown = Object.keys(args ?? {}).filter((k) => !allowed.includes(k))
-  if (unknown.length) {
-    throw new Error(`unknown argument(s): ${unknown.map((k) => JSON.stringify(k)).join(', ')}. ` +
-      `Valid arguments are: ${allowed.join(', ')}. Pass each as its own JSON field, e.g. {"filename": "audio/track.mp3", "duration": 20}.`)
   }
 }
 
@@ -110,6 +123,7 @@ const OUTPUT_SCHEMA = {
     model_load_seconds: { type: 'number', required: true },
     transparent: { type: 'boolean', required: true },
     transparent_percent: { type: 'integer', required: true },
+    notes: { type: 'string', required: true },
     show_with_read_image: { type: 'boolean', required: true },
   },
 }
@@ -129,6 +143,7 @@ function renderResult(verb) {
             ? ' — the transparent background worked. read_image may render transparent areas as a solid color; that is a display artifact, so do not regenerate because of it.'
             : ' — little or no transparency came out; retry once with a prompt that describes the subject isolated on a transparent background.')
         : '') +
+      (v.notes ? `\nNote: ${v.notes}. Check the result matches what you intended.` : '') +
       (v.show_with_read_image
         ? `\nNow call read_image with file_path "${v.path}" so the image is shown to the user in the chat and you can check it matches the request.`
         : ''),
@@ -139,7 +154,7 @@ export function apply(ctx, config = {}) {
   const BASE_URL = (process.env.IMAGE_SERVER_URL ?? config.url ?? DEFAULT_URL).replace(/\/+$/, '')
 
   // POST to image-server, download the result into the workspace, and build the tool value.
-  async function run(exec, endpoint, body, { target, steps, transparent }) {
+  async function run(exec, endpoint, body, { target, steps, transparent, notes = [] }) {
     let response
     try {
       response = await fetch(`${BASE_URL}${endpoint}`, {
@@ -181,6 +196,7 @@ export function apply(ctx, config = {}) {
       model_load_seconds: result.load_seconds ?? 0,
       transparent,
       transparent_percent: Math.round(100 * (item.transparent_fraction ?? 0)),
+      notes: notes.join('; '),
       show_with_read_image: Boolean(ctx.tools.get('read_image')) && (await routeAcceptsImages(ctx, exec)),
     }
   }
@@ -202,7 +218,7 @@ export function apply(ctx, config = {}) {
     ...(args.guidance !== undefined && { guidance: args.guidance }),
   })
 
-  ctx.tools.register(defineTool({
+  registerLenient(ctx, defineTool, {
     name: 'generate_image',
     description:
       'Generate an image from a text prompt with a local Qwen-Image 2.1 model and save it as a PNG in the workspace. ' +
@@ -222,8 +238,9 @@ export function apply(ctx, config = {}) {
     output: { schema: OUTPUT_SCHEMA, render: renderResult('Generated'), presentationMeta: (_args, v) => ({ path: v.path }) },
     timeoutMs: TIMEOUT_MS,
     isConcurrencySafe: () => false,
-    async execute(args, exec) {
-      rejectUnknownArgs(args, ['prompt', 'size', 'steps', 'init_image', 'strength', 'seed', 'transparent', 'negative_prompt', 'guidance', 'filename'])
+    async execute(rawArgs, exec) {
+      const { args, notes } = normalizeArgs('generate_image', rawArgs, GENERATE_SPEC, exec)
+      if (!args.prompt) throw new Error('prompt is required')
       const size = args.size ?? '1024x1024'
       const steps = args.steps ?? 40
       if (!SIZES.includes(size)) throw new Error(`size must be one of ${SIZES.join(', ')}`)
@@ -233,11 +250,11 @@ export function apply(ctx, config = {}) {
       const target = outputPath(workspace, args.filename, args.prompt)
       const init = args.init_image ? { image: await readInput(workspace, args.init_image), ...(args.strength !== undefined && { strength: args.strength }) } : {}
       return run(exec, '/v1/images/generations', { prompt: args.prompt, size, ...init, ...extras(args) },
-        { target, steps, transparent: Boolean(args.transparent) })
+        { target, steps, transparent: Boolean(args.transparent), notes })
     },
-  }))
+  })
 
-  ctx.tools.register(defineTool({
+  registerLenient(ctx, defineTool, {
     name: 'edit_image',
     description:
       'Edit or combine existing workspace images by instruction with a local Qwen-Image 2.1 model, and save the result as a PNG. ' +
@@ -257,8 +274,9 @@ export function apply(ctx, config = {}) {
     output: { schema: OUTPUT_SCHEMA, render: renderResult('Edited'), presentationMeta: (_args, v) => ({ path: v.path }) },
     timeoutMs: TIMEOUT_MS,
     isConcurrencySafe: () => false,
-    async execute(args, exec) {
-      rejectUnknownArgs(args, ['images', 'prompt', 'size', 'detail', 'steps', 'seed', 'transparent', 'negative_prompt', 'guidance', 'filename'])
+    async execute(rawArgs, exec) {
+      const { args, notes } = normalizeArgs('edit_image', rawArgs, EDIT_SPEC, exec)
+      if (!args.prompt) throw new Error('prompt is required')
       const images = Array.isArray(args.images) ? args.images : []
       if (images.length < 1 || images.length > 10) throw new Error('images must list 1 to 10 workspace paths')
       if (args.size && !SIZES.includes(args.size)) throw new Error(`size must be one of ${SIZES.join(', ')}`)
@@ -272,7 +290,7 @@ export function apply(ctx, config = {}) {
       return run(exec, '/v1/images/edits', {
         prompt: args.prompt, images: refs, output_resolution: DETAIL[detail],
         ...(args.size && { size: args.size }), ...extras(args),
-      }, { target, steps, transparent: Boolean(args.transparent) })
+      }, { target, steps, transparent: Boolean(args.transparent), notes })
     },
-  }))
+  })
 }

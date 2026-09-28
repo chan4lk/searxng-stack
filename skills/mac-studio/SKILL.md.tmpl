@@ -146,6 +146,17 @@ content; don't swap in YuE2 (CC-BY-NC). The backend log is
 `~/Library/Logs/music-backend.log`. From dsh, the `generate_music` tool saves
 into `generated-music/`.
 
+### Malformed tool calls (dsh)
+
+Splash's model often fuses argument names with their values or with each
+other in dsh (`formatmp3`, `bpm85`, `instrumentaltrue`,
+`"filename audio/x.mp3": 20`), sometimes on the first call of a session.
+The media tools share `~/.dsh/plugins/tool-args.mjs`, which splits and
+validates those keys. The first malformed call in a session is rejected with
+the corrected JSON to resend; later ones go ahead with the repaired arguments
+and a `Note:` in the result. If an agent loops anyway, start a fresh session:
+broken calls left in the history get copied. More memory won't help.
+
 ### studio-guard (dsh)
 
 `~/.dsh/plugins/studio-guard.mjs` denies any dsh tool call that reaches this

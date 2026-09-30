@@ -1,0 +1,105 @@
+# claude-splash: Claude Code on the Mac Studio's Splash server, using whichever
+# model Splash has loaded. Sourced from ~/.zshrc.
+#
+#   claude-splash [args...]                 use the loaded model
+#   claude-splash 3.6|3.8 [args...]         require that model; error if another is loaded
+#   claude-splash --switch 3.6|3.8 [args]   restart Splash on the Studio with that model
+#                                           (asks first: it drops every Splash client)
+#
+# Splash serves ONE model at a time, so every model setting (main, Opus/Sonnet/
+# Haiku defaults, subagents) is pointed at the same model, via a per-run copy of
+# ~/.claude/splash-settings.json. MCP servers and claude.ai connectors are left
+# out: they add ~60K prompt tokens and ~2 minutes to each session's first reply.
+
+typeset -gA _SPLASH_MODELS=(
+  3.6 incoai/Qwen3.6-35B-A3B-Splash
+  3.8 incoai/Qwen3.8-27B-Splash
+)
+_SPLASH_URL=http://__SERVER_IP__:8000
+_SPLASH_STUDIO=~/.claude/skills/__SERVER_NAME__/scripts/studio.sh
+
+_splash_loaded() {
+  curl -s -m 5 "$_SPLASH_URL/v1/models" 2>/dev/null |
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["data"][0]["id"])' 2>/dev/null
+}
+
+_splash_resolve() {  # 3.6 | 36 | full id -> full id
+  local key=${1//[^0-9.]/}
+  [[ $key == 36 ]] && key=3.6
+  [[ $key == 38 ]] && key=3.8
+  if [[ -n ${_SPLASH_MODELS[$key]} ]]; then print -r -- ${_SPLASH_MODELS[$key]}
+  elif [[ $1 == incoai/* ]]; then print -r -- $1
+  else return 1; fi
+}
+
+_splash_switch() {
+  local want=$1 now
+  now=$(_splash_loaded)
+  if [[ $now == $want ]]; then
+    print "claude-splash: $want is already loaded"
+    return 0
+  fi
+  print "claude-splash: Splash has ${now:-nothing (server down)} loaded."
+  print "Switching to $want restarts Splash on the Studio. It takes about a minute, and"
+  print "every Splash client drops meanwhile: dsh sessions, OpenViking, other claude-splash sessions."
+  read -q "?Switch now? [y/N] " || { print; return 1; }
+  print
+  bash $_SPLASH_STUDIO run "pkill -f 'splash serve|libexec/server/server.py'; sleep 3; nohup splash serve --host __SERVER_IP__ --port 8000 --model $want > ~/splash.log 2>&1 &" ||
+    { print "claude-splash: could not reach the Studio" >&2; return 1; }
+  local i
+  for i in {1..60}; do
+    sleep 5
+    [[ $(_splash_loaded) == $want ]] && { print "claude-splash: $want loaded"; return 0; }
+    print -n .
+  done
+  print "\nclaude-splash: $want still not listed after 5 minutes; check ~/splash.log on the Studio" >&2
+  return 1
+}
+
+claude-splash() {
+  local switch=0 want= model
+  if [[ $1 == --switch ]]; then
+    switch=1; shift
+    want=$(_splash_resolve "$1") || { print "usage: claude-splash --switch 3.6|3.8 [claude args]" >&2; return 2; }
+    shift
+  elif want=$(_splash_resolve "$1" 2>/dev/null) && [[ $1 != -* ]]; then
+    shift
+  else
+    want=
+  fi
+
+  if (( switch )); then
+    _splash_switch $want || return 1
+  fi
+
+  model=$(_splash_loaded)
+  if [[ -z $model ]]; then
+    print "claude-splash: Splash isn't answering at $_SPLASH_URL (start it with: claude-splash --switch 3.8)" >&2
+    return 1
+  fi
+  if [[ -n $want && $want != $model ]]; then
+    print "claude-splash: $want requested, but Splash has $model loaded." >&2
+    print "Use 'claude-splash --switch ${(k)_SPLASH_MODELS[(r)$want]:-<3.6|3.8>}' to swap, or 'claude-splash' to use $model." >&2
+    return 1
+  fi
+
+  local settings=${TMPDIR:-/tmp}/claude-splash-settings.$$.json
+  python3 - "$model" "$settings" <<'EOF' || return 1
+import json, os, sys
+model, out = sys.argv[1], sys.argv[2]
+d = json.load(open(os.path.expanduser('~/.claude/splash-settings.json')))
+for k in ('ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+          'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL'):
+    d['env'][k] = model
+d['model'] = model
+fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+with os.fdopen(fd, 'w') as f:
+    json.dump(d, f)
+EOF
+  print -u2 "claude-splash: $model"
+  ENABLE_CLAUDEAI_MCP_SERVERS=false claude --settings "$settings" \
+    --strict-mcp-config --mcp-config '{"mcpServers":{}}' "$@"
+  local rc=$?
+  rm -f "$settings"
+  return $rc
+}

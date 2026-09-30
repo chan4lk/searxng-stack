@@ -1,6 +1,6 @@
 ---
 name: __SERVER_NAME__
-description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash (the local Qwen LLM server), the SearXNG search stack, local image generation (Qwen-Image, image-server), or music generation (ACE-Step, music-server), or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
+description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash (the local Qwen LLM server), claude-splash or dsh-splash, the SearXNG search stack, local image generation (Qwen-Image, image-server), music generation (ACE-Step, music-server), or OpenViking agent memory, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
 ---
 
 # Managing the Mac Studio
@@ -34,6 +34,11 @@ foreground, not in the background, so the URL reaches you.
 
 - __SERVER_SPECS__
 - Tailscale address: `__SERVER_IP__`, MagicDNS `__SERVER_NAME__.__TAILNET__`
+- The Tailscale device name is pinned with `tailscale set --hostname=__SERVER_NAME__`.
+  Without that it follows the macOS hostname (`Chandimas-Mac-Studio`), and every
+  `…ts.net` URL below stops resolving. `tailscale serve` is keyed to the name,
+  so the wrong name gives 404 even where DNS resolves. The name `__SERVER_NAME__`
+  doesn't resolve on the Studio itself: bind to the IP there, not the name.
 
 ## Services
 
@@ -43,8 +48,9 @@ foreground, not in the background, so the URL reaches you.
 | **SearXNG** + Valkey | `http://__SERVER_NAME__.__TAILNET__:8889` (`/search?q=…&format=json`) | Docker Compose on Colima, published with `tailscale serve` | `~/searxng-stack/searxng.sh up\|down\|restart\|status\|logs\|test` |
 | **image-server** (Qwen-Image 2.1 via mflux) | `http://__SERVER_NAME__.__TAILNET__:8890` (`POST /v1/images/generations`, OpenAI-style) | LaunchAgent `com.searxng-stack.image-server`; model loads on demand | `~/searxng-stack/image-server/image-server.sh install\|status\|logs\|restart\|unload\|test` |
 | **music-server** (ACE-Step 1.5, MIT) | `http://__SERVER_NAME__.__TAILNET__:8891` (`POST /v1/music/generations`) | LaunchAgent `com.searxng-stack.music-server`; starts ACE-Step (`~/ace-step`) on demand | `~/searxng-stack/music-server/music-server.sh install\|status\|logs\|restart\|unload\|test` |
+| **OpenViking** (agent memory, AGPL-3.0) | `http://__SERVER_NAME__.__TAILNET__:1933` (API key required; `/health` is open) | LaunchAgent `com.openviking.server`, published with `tailscale serve` | see below |
 | **Colima** (Docker VM: 2 CPU, 2 GB) | — | `brew services` LaunchAgent, starts at login | `colima status\|start\|stop` |
-| **Ollama** | `127.0.0.1:11434`, local to the Studio only | macOS app | — |
+| **Ollama** | `127.0.0.1:11434`, local to the Studio only | macOS app | serves OpenViking's embeddings |
 
 The SearXNG stack is a git checkout of `github.com/chan4lk/searxng-stack`. To
 update it: `cd ~/searxng-stack && git pull && ./searxng.sh restart`. Its `.env`
@@ -62,25 +68,111 @@ Splash serves **one model at a time**. Both of these are downloaded:
 A request that names the model that isn't loaded gets `HTTP 404 model_not_found`.
 
 It isn't supervised by anything: it doesn't survive a reboot, and killing it
-takes the model offline for every client, including the MacBook's
-`claude-splash` and `dsh-splash`. **Ask the user before stopping, restarting or
-switching Splash's model.**
+takes the model offline for every client: the MacBook's `claude-splash` and
+`dsh-splash`, and OpenViking's summaries and memory extraction. **Ask the user
+before stopping, restarting or switching Splash's model.**
 
-Check what's loaded and how it was started:
+Check what's loaded (no SSH needed) and how it was started:
 
 ```bash
+curl -s http://__SERVER_IP__:8000/v1/models
 studio.sh run 'ps -o command= -p $(lsof -t -iTCP:8000 -sTCP:LISTEN)'
 ```
 
 **`--host` matters.** Splash defaults to `127.0.0.1`, which the MacBook can't
-reach. It must run with `--host __SERVER_NAME__` to be reachable over the tailnet.
-To start it or switch model (`MODEL` is one of the two above):
+reach. It must run with `--host __SERVER_IP__` to be reachable over the
+tailnet (`--host __SERVER_NAME__` fails: `cannot bind __SERVER_NAME__:8000`). To start it
+or switch model (`MODEL` is one of the two above):
 
 ```bash
-studio.sh run 'pkill -f "splash serve|libexec/server/server.py"; sleep 3; nohup splash serve --host __SERVER_NAME__ --port 8000 --model MODEL > ~/splash.log 2>&1 &'
+studio.sh run 'pkill -f "splash serve|libexec/server/server.py"; sleep 3; nohup splash serve --host __SERVER_IP__ --port 8000 --model MODEL > ~/splash.log 2>&1 &'
 ```
 
-Loading the model takes a while, so check `curl -s http://__SERVER_IP__:8000/v1/models` until it lists the model.
+Loading the model takes a while, so check `/v1/models` until it lists the model.
+After a switch, clients that name a model must match it. dsh and OpenViking
+(`vlm.model` in `~/.openviking/ov.conf`) name 3.8-27B.
+
+Splash has no `/v1/embeddings` (404): it serves chat only (`/v1/chat/completions`,
+`/v1/responses`, `/v1/messages`). Use Ollama for embeddings.
+
+`~/splash.log` has one line per request, `input … cached … tools N · TTFT`,
+which is the quickest way to see why a client is slow. A cold 85K-token prompt
+takes about 2 minutes before the first output token.
+
+### claude-splash (MacBook)
+
+A shell function in `~/.claude/splash/claude-splash.zsh`, sourced from
+`~/.zshrc`. It is not an alias: an `alias claude-splash=` line would override
+it.
+
+```bash
+claude-splash [args]                  # uses whatever Splash has loaded
+claude-splash 3.6|3.8 [args]          # refuses if a different model is loaded
+claude-splash --switch 3.6|3.8 [args] # asks, restarts Splash with it, waits, launches
+```
+
+- **Models:** it reads `/v1/models` and points every model setting (main,
+  Opus/Sonnet/Haiku defaults, subagents) at the loaded model, through a
+  per-run copy of `~/.claude/splash-settings.json`. That file also sets
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS=131072`.
+- **No MCP:** it launches with `--strict-mcp-config` and
+  `ENABLE_CLAUDEAI_MCP_SERVERS=false`. The user's MCP servers and claude.ai
+  connectors add about 60K prompt tokens and 180 tools. With them, the first
+  reply took 4 minutes; without them it takes 25–35 s, and later turns reuse
+  Splash's cache and start in under a second.
+- **Adding a model:** edit the `_SPLASH_MODELS` table at the top of the file.
+
+### dsh (MacBook)
+
+| Command | What it runs |
+|---|---|
+| `dsh-splash` | dsh on Splash, web UI by default (profile `web`) |
+| `dsh-splash --profile headless "task"` | One-shot task |
+| `dsh-splash-tui` | tvision terminal UI (profile `tvision`, built from `~/.dsh/src-dsh-tvision`); the user finds it ugly |
+
+The `web` profile has these plugins: dshmarket (Settings → Plugin Market),
+dsh-better-sidebar@0.19.1, dsh-chat-import, dsh-agent-teams@0.1.22 and
+@openviking/dsh-memory-plugin. The `dsh-tui` npm plugin doesn't work with dsh
+0.1.5, which is installed: it crashes with a blank screen.
+
+- **Plugin versions:** pin ones built for dsh 0.1.5.
+- **Installing:** `dsh plugin add` can fail with
+  `No matching version found for @deepseek-ai/dsh-settings@>=0.1.5 <0.2.0-0`.
+- **The web profile reloads live:** writing a bundle into `package.json` before
+  its package is installed breaks the running instance.
+- **Safe route:** install into a copy of the profile (e.g. `web-stage`) and
+  boot it on another port (`--port 18765 --no-open`). Then copy its
+  `pnpm-lock.yaml` and dependencies into the real profile, run
+  `pnpm install --frozen-lockfile`, and add to `dsh.profile.bundles` last.
+
+### OpenViking (agent memory)
+
+OpenViking 0.4.22 runs from a uv venv at `~/openviking/.venv`, with its `ov`
+CLI at `~/openviking/.venv/bin/ov`. It keeps data in `~/.openviking/data` and
+logs to `~/Library/Logs/openviking.log`. It uses ~450 MB of RAM.
+
+- **Config:** `~/.openviking/ov.conf` (chmod 600, holds `server.root_api_key`).
+  It binds 127.0.0.1:1933 in `api_key` auth mode, with account and user
+  `chandima`.
+- **Embeddings:** Ollama `qwen3-embedding:0.6b-8k`, 1024 dimensions. It's a
+  custom 8K-context variant of `qwen3-embedding:0.6b` that uses 2.9 GB instead
+  of 5.8 GB and unloads after 5 idle minutes. It goes through the `openai`
+  provider at `http://127.0.0.1:11434/v1`, with `encoding_format: float`.
+- **LLM:** Splash, `incoai/Qwen3.8-27B-Splash`, with
+  `extra_request_body: {"reasoning_effort": "none"}` and a 900 s timeout.
+  Summaries and memory extraction queue behind chat turns. They 404 while
+  another Splash model is loaded.
+- **Changing the embedding model name** fails at startup with
+  `EmbeddingRebuildRequiredError`. If the vectors are identical, start once
+  with `embedding.allow_metadata_override=true`, then remove it.
+- **Managing it:** `launchctl kickstart -k gui/$(id -u)/com.openviking.server`
+  restarts it, `launchctl print …` shows status (ask before `bootout`), and
+  `~/openviking/.venv/bin/openviking-server doctor` checks the config.
+- **Clients:** the MacBook's `~/.openviking/ovcli.conf` (chmod 600) holds
+  `url`, the user `api_key`, `account` and `user`, but no root key. The dsh
+  memory plugin reads it; `OPENVIKING_URL`, `OPENVIKING_API_KEY`,
+  `OPENVIKING_ACCOUNT` and `OPENVIKING_USER` override it.
+- **Home alias:** `viking://~/` resolves to `viking://user/chandima`.
 
 ### image-server
 
@@ -174,4 +266,6 @@ only: in Claude Code, the 'ask first' rules below still apply.
 - **Deleting or overwriting files, or stopping services, without asking.** The Studio is shared infrastructure, so confirm these first. Read-only checks such as `health`, `status` and `logs` are fine without asking.
 - **Trusting `brew services list`.** It can show Colima as `stopped` while the VM is running. Check with `colima status`.
 - **Installing packages.** Use `HOMEBREW_NO_AUTO_UPDATE=1 NONINTERACTIVE=1 brew install …`. A `brew install` that waits for input hangs the SSH session.
-- **Opening SearXNG to the internet.** Its bot limiter is off because it's reached only from the tailnet. Never bind it to `0.0.0.0` or enable `tailscale funnel`.
+- **Opening SearXNG to the internet.** Its bot limiter is off because it's reached only from the tailnet. Never bind it to `0.0.0.0` or enable `tailscale funnel`. The same goes for OpenViking.
+- **Blaming the MacBook's DNS when a `…ts.net` URL fails.** Check the Studio's current name first: `tailscale status --json` → the peer's `DNSName`. See Machine.
+- **Editing this skill, `studio.sh`, `splash-settings.json` or `claude-splash.zsh` in place only.** `~/searxng-stack/install.sh` renders them from templates in that repo. Update the matching `.tmpl` too, and check that `./install.sh --dry-run` reports them as unchanged.

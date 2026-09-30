@@ -12,7 +12,8 @@
 #   ~/.claude/skills/<SERVER_NAME>/                     server-management skill
 #   ~/.dsh/splash.settings.yaml, ~/.dsh/splash.patch.yml dsh -> Splash + SearXNG
 #   ~/.dsh/plugins/{searxng-search,cwd-workspace,image-generate,music-generate,studio-guard}.mjs
-#   aliases claude-splash / dsh-splash in ~/.zshrc
+#   ~/.claude/splash/claude-splash.zsh                  claude-splash function (sourced)
+#   alias dsh-splash in ~/.zshrc
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -86,6 +87,24 @@ add_alias() {
   fi
 }
 
+# Source a shell file from ~/.zshrc, replacing an old `alias <name>=` line
+# (an alias would override the function the file defines).
+add_source() {
+  local name="$1" line="$2" rc="$HOME/.zshrc"
+  if grep -qxF "$line" "$rc" 2>/dev/null && ! grep -q "^alias ${name}=" "$rc"; then
+    echo "  unchanged  source for $name"; return
+  fi
+  if (( DRY_RUN )); then echo "  would source $name in ~/.zshrc (replacing any alias)"; return; fi
+  cp -p "$rc" "$rc.bak-$STAMP"
+  local tmp; tmp="$(mktemp)"
+  awk -v n="alias ${name}=" -v l="$line" '
+    index($0, n) == 1 { if (!done) print l; done = 1; next }
+    $0 == l { if (!done) print; done = 1; next }
+    { print }
+    END { if (!done) print l }' "$rc" > "$tmp" && mv "$tmp" "$rc"
+  echo "  updated    source for $name  (backup: .zshrc.bak-$STAMP)"
+}
+
 SKILL_DIR="$HOME/.claude/skills/$SERVER_NAME"
 SEARXNG_URL="http://${SERVER_NAME}.${TAILNET}:8889"
 IMAGE_SERVER_URL="http://${SERVER_NAME}.${TAILNET}:8890"
@@ -93,6 +112,7 @@ IMAGE_SERVER_URL="http://${SERVER_NAME}.${TAILNET}:8890"
 (( DRY_RUN )) && echo "Dry run: nothing will be written."
 echo "Claude Code"
 install_file clients/claude-code/splash-settings.json.tmpl "$HOME/.claude/splash-settings.json" render
+install_file clients/claude-code/claude-splash.zsh.tmpl  "$HOME/.claude/splash/claude-splash.zsh" render
 install_file skills/mac-studio/SKILL.md.tmpl              "$SKILL_DIR/SKILL.md" render
 install_file skills/mac-studio/scripts/studio.sh.tmpl     "$SKILL_DIR/scripts/studio.sh" render
 echo "DeepSeek Harness"
@@ -104,8 +124,8 @@ install_file clients/dsh/image-generate.mjs        "$HOME/.dsh/plugins/image-gen
 install_file clients/dsh/tool-args.mjs             "$HOME/.dsh/plugins/tool-args.mjs"
 install_file clients/dsh/music-generate.mjs        "$HOME/.dsh/plugins/music-generate.mjs"
 install_file clients/dsh/studio-guard.mjs          "$HOME/.dsh/plugins/studio-guard.mjs"
-echo "Shell aliases (~/.zshrc)"
-add_alias claude-splash "alias claude-splash='claude --settings ~/.claude/splash-settings.json'"
+echo "Shell (~/.zshrc)"
+add_source claude-splash "source ~/.claude/splash/claude-splash.zsh   # claude-splash [--switch] [3.6|3.8] — Claude Code on Splash"
 add_alias dsh-splash "alias dsh-splash='SPLASH_API_KEY=splash-local SEARXNG_URL=${SEARXNG_URL} IMAGE_SERVER_URL=${IMAGE_SERVER_URL} dsh --patch ~/.dsh/splash.patch.yml'"
 
 (( DRY_RUN )) && exit 0

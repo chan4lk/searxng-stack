@@ -2,7 +2,7 @@
 # SSH helper for the Mac Studio on the tailnet.
 #
 #   bash studio.sh run '<command>'   run a command there (Homebrew/Docker on PATH)
-#   bash studio.sh health            one-shot status of Splash, SearXNG, Colima, disk, memory
+#   bash studio.sh health            one-shot status of Splash, SearXNG, image/music servers, OpenViking, Colima, disk, memory
 #   bash studio.sh copy <src> <dst>  scp a local path to the Studio (dst relative to ~)
 #
 # Tailscale SSH "check mode" can demand a browser sign-in. When it does, this
@@ -58,14 +58,15 @@ case "${1:-}" in
   health)
     ssh_watch "${USER_NAME}@${HOST}" "${REMOTE_PATH}"'
       printf "%-10s " splash;  mid() { curl -s -m 5 "$1/v1/models" | python3 -c "import json,sys; print(json.load(sys.stdin)[\"data\"][0][\"id\"])" 2>/dev/null; }
-      if m=$(mid http://__SERVER_NAME__:8000) && [ -n "$m" ]; then echo "up: $m (tailnet OK)"
-      elif m=$(mid http://127.0.0.1:8000) && [ -n "$m" ]; then echo "up: $m but LOOPBACK ONLY - restart with --host __SERVER_NAME__"
+      if m=$(mid http://__SERVER_IP__:8000) && [ -n "$m" ]; then echo "up: $m (tailnet OK)"
+      elif m=$(mid http://127.0.0.1:8000) && [ -n "$m" ]; then echo "up: $m but LOOPBACK ONLY - restart with --host __SERVER_IP__"
       else echo DOWN; fi
       printf "%-10s " searxng; curl -s -m 20 "http://127.0.0.1:8889/search?q=test&format=json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"up:\", len(d[\"results\"]), \"results\")" 2>/dev/null || echo DOWN
       printf "%-10s " images;  curl -s -m 5 http://127.0.0.1:8890/health | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"up:\", \"model LOADED (q=%s)\" % d[\"quantize\"] if d[\"loaded\"] else \"idle, model unloaded\", \"| busy\" if d[\"busy\"] else \"\")" 2>/dev/null || echo DOWN
       printf "%-10s " music;   curl -s -m 5 http://127.0.0.1:8891/health | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"up:\", \"ACE-Step RUNNING\" if d[\"backend_running\"] else \"idle, ACE-Step stopped\", \"| busy\" if d[\"busy\"] else \"\")" 2>/dev/null || echo DOWN
+      printf "%-10s " openviking; curl -s -m 5 http://127.0.0.1:1933/health | python3 -c "import json,sys; d=json.load(sys.stdin); print(\"up:\", d[\"version\"]) if d.get(\"healthy\") else print(\"UNHEALTHY\")" 2>/dev/null || echo DOWN
       printf "%-10s " colima;  colima status >/dev/null 2>&1 && echo running || echo STOPPED
-      printf "%-10s " serve;   tailscale serve status 2>/dev/null | grep -q 8889 && echo "published :8889" || echo "NOT published"
+      printf "%-10s " serve;   s=$(tailscale serve status 2>/dev/null); out=; for p in 8889 8890 8891 1933; do echo "$s" | grep -q ":$p" && out="$out :$p" || out="$out :$p-MISSING"; done; echo "published$out"
       printf "%-10s " disk;    df -h / | awk "NR==2{print \$4\" free of \"\$2}"
       printf "%-10s " memory;  memory_pressure 2>/dev/null | awk -F": " "/free percentage/{print \$2\" free\"}"
       printf "%-10s " uptime;  uptime | sed "s/.*up /up /; s/,.*user.*//"' ;;

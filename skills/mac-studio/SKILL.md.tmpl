@@ -1,6 +1,6 @@
 ---
 name: __SERVER_NAME__
-description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash (the local Qwen LLM server), claude-splash or dsh-splash, the SearXNG search stack, local image generation (Qwen-Image, image-server), music generation (ACE-Step, music-server), or OpenViking agent memory, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
+description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash (the local Qwen LLM server), claude-splash, opencode-splash, pi-splash or dsh-splash, the SearXNG search stack, local image generation (Qwen-Image, image-server), music generation (ACE-Step, music-server), or OpenViking agent memory, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
 ---
 
 # Managing the Mac Studio
@@ -85,10 +85,12 @@ tailnet (`--host __SERVER_NAME__` fails: `cannot bind __SERVER_NAME__:8000`). To
 or switch model (`MODEL` is one of the two above):
 
 ```bash
-studio.sh run 'pkill -f "splash serve|libexec/server/server.py"; sleep 3; nohup splash serve --host __SERVER_IP__ --port 8000 --model MODEL > ~/splash.log 2>&1 &'
+studio.sh run 'pkill -f "splash serve|libexec/server/server.py"; sleep 3; nohup splash serve --host __SERVER_IP__ --port 8000 --model MODEL --max-cache-disk 40G > ~/splash.log 2>&1 &'
 ```
 
-Loading the model takes a while, so check `/v1/models` until it lists the model.
+Splash is 1.1.0 (`brew upgrade splash`; the tap only refreshes after `brew update`).
+`--max-cache-disk 40G` keeps evicted prompt caches on the SSD; context defaults
+to 256K. Loading takes ~10 s; check `/v1/models` until it lists the model.
 After a switch, clients that name a model must match it. dsh and OpenViking
 (`vlm.model` in `~/.openviking/ov.conf`) name 3.8-27B.
 
@@ -99,11 +101,11 @@ Splash has no `/v1/embeddings` (404): it serves chat only (`/v1/chat/completions
 which is the quickest way to see why a client is slow. A cold 85K-token prompt
 takes about 2 minutes before the first output token.
 
-### claude-splash (MacBook)
+### claude-splash, opencode-splash, pi-splash (MacBook)
 
-A shell function in `~/.claude/splash/claude-splash.zsh`, sourced from
-`~/.zshrc`. It is not an alias: an `alias claude-splash=` line would override
-it.
+Shell functions in `~/.claude/splash/claude-splash.zsh`, sourced from
+`~/.zshrc`. They are not aliases: an `alias claude-splash=` line would override
+them. All three take the same leading arguments:
 
 ```bash
 claude-splash [args]                  # uses whatever Splash has loaded
@@ -120,7 +122,43 @@ claude-splash --switch 3.6|3.8 [args] # asks, restarts Splash with it, waits, la
   connectors add about 60K prompt tokens and 180 tools. With them, the first
   reply took 4 minutes; without them it takes 25–35 s, and later turns reuse
   Splash's cache and start in under a second.
-- **Adding a model:** edit the `_SPLASH_MODELS` table at the top of the file.
+- **Prompt cache:** it also sets `CLAUDE_CODE_ATTRIBUTION_HEADER=0`,
+  `CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1`, `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`
+  and `--exclude-dynamic-system-prompt-sections`. Without that flag every new
+  session missed Splash's cache (`cached 0`, ~25 s); with it a new session
+  reuses the 23K-token prefix (~0.4 s to first token).
+- **Qwen3.6 profile:** when the 35B-A3B is loaded, `claude-splash` adds
+  harness-side help for the weaker model. `SPLASH_PROFILE=off` skips it, for
+  A/B runs; `SPLASH_PROFILE=force` applies it to any model.
+  - `splash-proxy.py`, a per-run local proxy, adds Qwen's coding sampling
+    (temperature 0.6, top_p 0.95, top_k 20) and
+    `context_management: clear_thinking keep:all`. That's the only way Splash's
+    Anthropic API turns on `preserve_thinking`; without it Qwen3.6 sends
+    empty-argument tool calls after a few turns.
+  - A `PostToolUse` hook (`hooks/check-edit.sh`) syntax/lint-checks each
+    edited file. It exits 2 so the model fixes errors at once.
+  - A `Stop` hook (`hooks/verify-on-stop.sh`) blocks finishing while the
+    project's verify command fails. It's opt-in per repo:
+    `.claude/splash-verify` holds one command line, or set `SPLASH_VERIFY_CMD`.
+    It blocks at most 3 times per session.
+  - `qwen36-discipline.md` is appended to the system prompt (plan, check
+    every edit, loop guard, no "done" without output).
+  - It also sets `CLAUDE_CODE_MAX_OUTPUT_TOKENS=32768`, autocompact at 60%
+    and `BASH_MAX_OUTPUT_LENGTH=15000`.
+  - These files live in `~/.claude/splash/` and come from
+    `clients/claude-code/splash/` in the repo.
+- **opencode-splash** runs OpenCode from its own lean config in
+  `~/.config/opencode-splash/opencode/opencode.json`: Splash provider only, no
+  plugins, `skill` and `webfetch` tools off. Sessions and auth stay shared with
+  normal opencode. The user's normal config loads oh-my-openagent (Sisyphus),
+  which sent 80K tokens and 46 tools with no cross-session cache (~104 s first
+  token), and its `small_model` points at an offline MacBook server. The lean
+  config sends ~10K tokens and 8 tools, ~6 s per reply. In scripts, give
+  `opencode run` `</dev/null`, or it waits on stdin.
+- **pi-splash** runs Pi with the `splash` provider in `~/.pi/agent/models.json`:
+  4 tools, ~14K tokens.
+- **Adding a model:** edit the `_SPLASH_MODELS` table at the top of the file,
+  plus the provider model lists in the OpenCode and Pi configs.
 
 ### dsh (MacBook)
 
@@ -128,12 +166,13 @@ claude-splash --switch 3.6|3.8 [args] # asks, restarts Splash with it, waits, la
 |---|---|
 | `dsh-splash` | dsh on Splash, web UI by default (profile `web`) |
 | `dsh-splash --profile headless "task"` | One-shot task |
-| `dsh-splash-tui` | tvision terminal UI (profile `tvision`, built from `~/.dsh/src-dsh-tvision`); the user finds it ugly |
 
 The `web` profile has these plugins: dshmarket (Settings → Plugin Market),
 dsh-better-sidebar@0.19.1, dsh-chat-import, dsh-agent-teams@0.1.22 and
 @openviking/dsh-memory-plugin. The `dsh-tui` npm plugin doesn't work with dsh
-0.1.5, which is installed: it crashes with a blank screen.
+0.1.5, which is installed: it crashes with a blank screen. dsh-tvision worked
+but was removed (the user found it ugly); use `opencode-splash` or `pi-splash`
+for a terminal UI.
 
 - **Plugin versions:** pin ones built for dsh 0.1.5.
 - **Installing:** `dsh plugin add` can fail with

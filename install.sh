@@ -12,7 +12,8 @@
 #   ~/.claude/skills/<SERVER_NAME>/                     server-management skill
 #   ~/.dsh/splash.settings.yaml, ~/.dsh/splash.patch.yml dsh -> Splash + SearXNG
 #   ~/.dsh/plugins/{searxng-search,cwd-workspace,image-generate,music-generate,studio-guard}.mjs
-#   ~/.claude/splash/claude-splash.zsh                  claude-splash function (sourced)
+#   ~/.claude/splash/claude-splash.zsh                  claude-splash / opencode-splash / pi-splash (sourced)
+#   ~/.claude/splash/{splash-proxy.py,qwen36-discipline.md,hooks/}  Qwen3.6 profile
 #   alias dsh-splash in ~/.zshrc
 set -euo pipefail
 
@@ -113,6 +114,10 @@ IMAGE_SERVER_URL="http://${SERVER_NAME}.${TAILNET}:8890"
 echo "Claude Code"
 install_file clients/claude-code/splash-settings.json.tmpl "$HOME/.claude/splash-settings.json" render
 install_file clients/claude-code/claude-splash.zsh.tmpl  "$HOME/.claude/splash/claude-splash.zsh" render
+install_file clients/claude-code/splash/splash-proxy.py         "$HOME/.claude/splash/splash-proxy.py"
+install_file clients/claude-code/splash/qwen36-discipline.md     "$HOME/.claude/splash/qwen36-discipline.md"
+install_file clients/claude-code/splash/hooks/check-edit.sh      "$HOME/.claude/splash/hooks/check-edit.sh"
+install_file clients/claude-code/splash/hooks/verify-on-stop.sh  "$HOME/.claude/splash/hooks/verify-on-stop.sh"
 install_file skills/mac-studio/SKILL.md.tmpl              "$SKILL_DIR/SKILL.md" render
 install_file skills/mac-studio/scripts/studio.sh.tmpl     "$SKILL_DIR/scripts/studio.sh" render
 echo "DeepSeek Harness"

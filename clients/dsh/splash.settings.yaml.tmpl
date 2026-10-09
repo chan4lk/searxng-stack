@@ -40,6 +40,27 @@ llm-pi-ai:
           # Also emits reasoning_content, and reasons at length: keep maxTokens
           # generous or replies can end mid-thought (finish_reason: length).
 
+    # sushi on the Studio (Qwen3.8-Flash-Next-Sushi-3bpw, 4-bit KV, 256K context),
+    # started by ~/sushi-serve.sh there. Requires its API key: dsh-splash exports
+    # SUSHI_API_KEY from ~/.sushi-api-key.
+    sushi:
+      displayName: Sushi
+      api: openai-completions
+      baseURL: http://__SERVER_IP__:8084/v1
+      apiKeyEnv: SUSHI_API_KEY
+      streamIdleTimeoutMs: 300000
+      defaultContextWindow: 262144
+      defaultMaxTokens: 32000
+      compat:
+        supportsDeveloperRole: true
+        maxTokensField: max_tokens
+      models:
+        - id: Qwen3.8-Flash-Next-Sushi-3bpw
+          name: Qwen3.8 Flash-Next Sushi 3bpw
+          # Text only: sushi turns vision off while experts stream from the SSD.
+          contextWindow: 262144
+          maxTokens: 32000
+
 agent-default-model:
-  provider: splash
-  model: __SPLASH_MODEL__
+  provider: sushi
+  model: Qwen3.8-Flash-Next-Sushi-3bpw

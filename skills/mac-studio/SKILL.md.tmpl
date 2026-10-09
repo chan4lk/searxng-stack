@@ -1,6 +1,6 @@
 ---
 name: __SERVER_NAME__
-description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash (the local Qwen LLM server), claude-splash, opencode-splash, pi-splash or dsh-splash, the SearXNG search stack, local image generation (Qwen-Image, image-server), music generation (ACE-Step, music-server), or OpenViking agent memory, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
+description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash or Sushi (the local Qwen LLM servers), claude-splash, opencode-splash, pi-splash or dsh-splash, the SearXNG search stack, local image generation (Qwen-Image, image-server), music generation (ACE-Step, music-server), text classification (GLiNER2.5-Decide, classify-server), or OpenViking agent memory, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
 ---
 
 # Managing the Mac Studio
@@ -45,9 +45,11 @@ foreground, not in the background, so the URL reaches you.
 | Service | Endpoint | How it runs | Manage |
 |---|---|---|---|
 | **Splash** (Qwen3.8-27B LLM) | `http://__SERVER_IP__:8000` (OpenAI `/v1/chat/completions` and Anthropic `/v1/messages`) | Foreground `splash serve` in a login shell, **not a service** | see below |
+| **Sushi** (Qwen3.8-Flash-Next-Sushi-3bpw) | `http://__SERVER_IP__:8084` (OpenAI `/v1/chat/completions`, Anthropic `/v1/messages`; API key required, `/health` open) | Foreground `~/sushi-serve.sh` via nohup, **not a service**; log `~/sushi.log` | see below |
 | **SearXNG** + Valkey | `http://__SERVER_NAME__.__TAILNET__:8889` (`/search?q=…&format=json`) | Docker Compose on Colima, published with `tailscale serve` | `~/searxng-stack/searxng.sh up\|down\|restart\|status\|logs\|test` |
 | **image-server** (Qwen-Image 2.1 via mflux) | `http://__SERVER_NAME__.__TAILNET__:8890` (`POST /v1/images/generations`, OpenAI-style) | LaunchAgent `com.searxng-stack.image-server`; model loads on demand | `~/searxng-stack/image-server/image-server.sh install\|status\|logs\|restart\|unload\|test` |
 | **music-server** (ACE-Step 1.5, MIT) | `http://__SERVER_NAME__.__TAILNET__:8891` (`POST /v1/music/generations`) | LaunchAgent `com.searxng-stack.music-server`; starts ACE-Step (`~/ace-step`) on demand | `~/searxng-stack/music-server/music-server.sh install\|status\|logs\|restart\|unload\|test` |
+| **classify-server** (GLiNER2.5-Decide, Apache-2.0) | `http://__SERVER_NAME__.__TAILNET__:8892` (`POST /v1/classify`) | LaunchAgent `com.searxng-stack.classify-server`; model stays loaded | `~/searxng-stack/classify-server/classify-server.sh install\|status\|logs\|restart\|test` |
 | **OpenViking** (agent memory, AGPL-3.0) | `http://__SERVER_NAME__.__TAILNET__:1933` (API key required; `/health` is open) | LaunchAgent `com.openviking.server`, published with `tailscale serve` | see below |
 | **Colima** (Docker VM: 2 CPU, 2 GB) | — | `brew services` LaunchAgent, starts at login | `colima status\|start\|stop` |
 | **Ollama** | `127.0.0.1:11434`, local to the Studio only | macOS app | serves OpenViking's embeddings |
@@ -100,6 +102,26 @@ Splash has no `/v1/embeddings` (404): it serves chat only (`/v1/chat/completions
 `~/splash.log` has one line per request, `input … cached … tools N · TTFT`,
 which is the quickest way to see why a client is slow. A cold 85K-token prompt
 takes about 2 minutes before the first output token.
+
+### Sushi
+
+[sushi](https://github.com/beamivalice/sushi) 1.2.1 (MIT, `brew install beamivalice/tap/sushi`; source checkout
+read-only at `~/github_repos/sushi`) serves `Qwen3.8-Flash-Next-Sushi-3bpw` (80 GB in
+`~/.sushi/models/Qwen3.8-Flash-Next-Sushi-3bpw`: 49.3 GiB weights + a 29.8 GiB n-gram table read from the SSD).
+dsh's default model since 2026-10-09 (provider `sushi` in `~/.dsh/splash.settings.yaml`).
+
+- **Start:** `nohup ~/sushi-serve.sh > ~/sushi.log 2>&1 &`. It binds `__SERVER_IP__:8084` with 4-bit KV and 256K
+  context. Like Splash it isn't supervised and doesn't survive a reboot; **ask before stopping it.**
+- **Key:** `~/.sushi/api-key` on the Studio (passed by `--api-key-env`), copied to the MacBook's `~/.sushi-api-key`;
+  the `dsh-splash` alias exports it as `SUSHI_API_KEY`. Without it: 401.
+- **Memory:** without sudo, the weights don't fit resident, so `--ssd-budget-gb 36` streams routed experts from
+  the SSD (sushi sets its own wired limit to ~53 GB). MTP still runs. Measured warm decode 62–78 tok/s.
+  `sudo sysctl iogpu.wired_limit_mb=59000` (resets at reboot) makes the script load resident with `--fast`;
+  59,000 is the ceiling for 64 GB, above it macOS panics.
+- **It needs Splash, image-server, music-server and classify-server off.** They were stopped on 2026-10-09
+  (`launchctl bootout` for the three LaunchAgents; `launchctl bootstrap gui/$(id -u)
+  ~/Library/LaunchAgents/com.searxng-stack.<name>.plist` brings one back). With Splash off, OpenViking's
+  summaries and memory extraction fail until Splash runs again.
 
 ### claude-splash, opencode-splash, pi-splash (MacBook)
 
@@ -276,6 +298,34 @@ ACE-Step is MIT-licensed, so the output is fine for the user's business
 content; don't swap in YuE2 (CC-BY-NC). The backend log is
 `~/Library/Logs/music-backend.log`. From dsh, the `generate_music` tool saves
 into `generated-music/`.
+
+### classify-server
+
+GLiNER2.5-Decide (fastino) is a 340M-parameter DeBERTa-v3 classifier for
+operational decisions: intent routing, urgency, sentiment, document type and
+multi-label tags. It doesn't generate text or answer questions. It is
+English-focused; `fastino/GLiNER2.5-multi-Decide` is the multilingual sibling
+(`CLASSIFY_MODEL=… ./classify-server.sh install`).
+
+- **Install:** `gliner2[local]` (the bare package has no torch or transformers).
+- **Runs on:** Apple's GPU (MPS). ~1.2 GB RAM, loads in ~4.5 s at startup.
+- **Speed:** ~50 ms per warm call; a batch of 64 texts takes ~0.6 s.
+- **Concurrency:** requests run one at a time.
+
+```bash
+curl -s http://__SERVER_NAME__.__TAILNET__:8892/v1/classify -H 'content-type: application/json' -d '{
+  "text": "Can I get a refund for the double charge?",
+  "tasks": {"intent": ["refund_request", "bug_report", "other"],
+            "route": {"labels": ["billing", "support", "engineering"], "multi_label": true, "cls_threshold": 0.4}},
+  "include_confidence": true}'
+```
+
+- **Request:** send `text` (→ `result`) or `texts` (up to 256, → `results`).
+  Several tasks in one call share one forward pass.
+- **Options:** `threshold` (0.5), `include_confidence`, `long` (chunks text past
+  the encoder window), `batch_size` (8).
+- **Responses:** without confidence a single-label task returns a string;
+  with confidence it returns `{label, confidence}`.
 
 ### Malformed tool calls (dsh)
 

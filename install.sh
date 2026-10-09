@@ -131,7 +131,7 @@ install_file clients/dsh/music-generate.mjs        "$HOME/.dsh/plugins/music-gen
 install_file clients/dsh/studio-guard.mjs          "$HOME/.dsh/plugins/studio-guard.mjs"
 echo "Shell (~/.zshrc)"
 add_source claude-splash "source ~/.claude/splash/claude-splash.zsh   # claude-splash [--switch] [3.6|3.8] — Claude Code on Splash"
-add_alias dsh-splash "alias dsh-splash='SPLASH_API_KEY=splash-local SEARXNG_URL=${SEARXNG_URL} IMAGE_SERVER_URL=${IMAGE_SERVER_URL} dsh --patch ~/.dsh/splash.patch.yml'"
+add_alias dsh-splash "alias dsh-splash='SPLASH_API_KEY=splash-local SUSHI_API_KEY=\$(cat ~/.sushi-api-key) SEARXNG_URL=${SEARXNG_URL} IMAGE_SERVER_URL=${IMAGE_SERVER_URL} dsh --patch ~/.dsh/splash.patch.yml'"
 
 (( DRY_RUN )) && exit 0
 echo

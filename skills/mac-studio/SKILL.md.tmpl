@@ -119,7 +119,8 @@ dsh's default model since 2026-10-09 (provider `sushi` in `~/.dsh/splash.setting
   above it macOS panics) the script keeps 44 GiB resident: 102–111 tok/s warm. Without it, 36 GiB: ~80 tok/s.
   `SUSHI_RESIDENT=1` loads fully resident with `--fast`, but that needs ~56 GiB free for 256K context; with Colima,
   Ollama and OpenViking running only ~53 GiB is free, which caps context at 34K (too small for dsh's ~12K-token
-  prompt and tools).
+  prompt and tools). With those three and SearXNG stopped (2026-10-09) it loads at 256K: 104–111 tok/s warm, prefill
+  of a short prompt ~170 ms vs ~370 ms streamed, 16% memory free.
 - **It needs Splash, image-server, music-server and classify-server off.** They were stopped on 2026-10-09
   (`launchctl bootout` for the three LaunchAgents; `launchctl bootstrap gui/$(id -u)
   ~/Library/LaunchAgents/com.searxng-stack.<name>.plist` brings one back). With Splash off, OpenViking's

@@ -114,10 +114,12 @@ dsh's default model since 2026-10-09 (provider `sushi` in `~/.dsh/splash.setting
   context. Like Splash it isn't supervised and doesn't survive a reboot; **ask before stopping it.**
 - **Key:** `~/.sushi/api-key` on the Studio (passed by `--api-key-env`), copied to the MacBook's `~/.sushi-api-key`;
   the `dsh-splash` alias exports it as `SUSHI_API_KEY`. Without it: 401.
-- **Memory:** without sudo, the weights don't fit resident, so `--ssd-budget-gb 36` streams routed experts from
-  the SSD (sushi sets its own wired limit to ~53 GB). MTP still runs. Measured warm decode 62–78 tok/s.
-  `sudo sysctl iogpu.wired_limit_mb=59000` (resets at reboot) makes the script load resident with `--fast`;
-  59,000 is the ceiling for 64 GB, above it macOS panics.
+- **Memory:** the weights don't fit resident beside the other services, so routed experts stream from the SSD
+  (MTP still runs). With `sudo sysctl iogpu.wired_limit_mb=59000` (resets at reboot; 59,000 is the 64 GB ceiling,
+  above it macOS panics) the script keeps 44 GiB resident: 102–111 tok/s warm. Without it, 36 GiB: ~80 tok/s.
+  `SUSHI_RESIDENT=1` loads fully resident with `--fast`, but that needs ~56 GiB free for 256K context; with Colima,
+  Ollama and OpenViking running only ~53 GiB is free, which caps context at 34K (too small for dsh's ~12K-token
+  prompt and tools).
 - **It needs Splash, image-server, music-server and classify-server off.** They were stopped on 2026-10-09
   (`launchctl bootout` for the three LaunchAgents; `launchctl bootstrap gui/$(id -u)
   ~/Library/LaunchAgents/com.searxng-stack.<name>.plist` brings one back). With Splash off, OpenViking's

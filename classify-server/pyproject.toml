@@ -1,0 +1,13 @@
+[project]
+name = "classify-server"
+version = "0.1.0"
+description = "GLiNER2.5-Decide text classification behind a small HTTP API"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "gliner2[local]>=2.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
+
+[tool.uv]
+package = false

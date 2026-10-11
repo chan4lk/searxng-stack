@@ -170,7 +170,8 @@ def model_path() -> str | None:
         return None
     from huggingface_hub import snapshot_download
 
-    return snapshot_download(TURBO_REPO, local_files_only=True)
+    # The download skips the repo's preview images, so leave them out of the completeness check.
+    return snapshot_download(TURBO_REPO, local_files_only=True, ignore_patterns=["assets/*"])
 
 
 PEAKS_FILE = Path(os.environ.get("IMAGE_PEAKS_FILE", Path.home() / ".image-server-peaks.json"))

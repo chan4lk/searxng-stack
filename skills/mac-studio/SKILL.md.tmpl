@@ -165,8 +165,8 @@ on port 8086 serves the official Q4_K_M GGUF with its vision projector and Splas
   `~/ornith/gguf_ssm_f32.py SRC DST` (run with `~/mellum/.venv/bin/python -I`, which has `gguf`) rewrites
   those 60 tensors as F32 (exact dequantization) and copies the other 693 byte for byte. The result is a
   local cache repo, `~/.cache/huggingface/hub/models--local--Ornith-1.5-35B-A3B-GGUF/`, with `refs/main`
-  naming a made-up 40-hex snapshot that also holds the mmproj (hard link). The untouched download is still in
-  `models--ornith-ai--Ornith-1.5-35B-A3B-GGUF` (20 GiB).
+  naming a made-up 40-hex snapshot that also holds the mmproj (hard link). The untouched official download was
+  deleted; to redo the patch, re-download `Ornith-1.5-35B-Q4_K_M.gguf` and the mmproj.
 - **Splash takes only a repo id** (`OWNER/REPO[:VARIANT]`), never a local path. A local cache repo like the
   one above works with `HF_HUB_OFFLINE=1`.
 - **What didn't work (2026-10-11):**
@@ -175,7 +175,7 @@ on port 8086 serves the official Q4_K_M GGUF with its vision projector and Splas
   - The oMLX build `scottlowry/Ornith-1.5-35B-A3B-oQ4e-mtp` (deleted): Splash rejects its mixed 5/6/8-bit
     layers (`unsupported affine quantization for …linear_attn.in_proj_qkv`), and its config spells
     `rope_parameters.type` instead of `rope_type`.
-  - Ornith's own `ornith-ai/Ornith-1.5-35B-A3B-DFlash` (742 MB, still cached) is a DFlash v1 draft; Splash
+  - Ornith's own `ornith-ai/Ornith-1.5-35B-A3B-DFlash` (deleted) is a DFlash v1 draft; Splash
     needs DFlash2.
 
 ### claude-splash, opencode-splash, pi-splash (MacBook)

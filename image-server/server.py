@@ -1,6 +1,6 @@
 """On-demand image generation API for Apple silicon.
 
-Serves Qwen-Image 2.1 through mflux (MLX) behind OpenAI-style endpoints:
+Serves Qwen-Image 2.1 (Turbo by default, IMAGE_MODEL=base for the 40-step model) through mflux (MLX) behind OpenAI-style endpoints:
 
 - POST /v1/images/generations   text-to-image; optional transparent (RGBA)
                                 output; optional `image` + `strength` for
@@ -43,7 +43,15 @@ from pydantic import BaseModel, Field, field_validator
 log = logging.getLogger("image-server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-MODEL_ID = "qwen-image-2.1"
+# IMAGE_MODEL picks the checkpoint: "turbo" (Qwen-Image-2.1-Turbo, 8 steps) or "base" (Qwen-Image-2.1, ~40 steps).
+# Turbo has the same architecture as the base model, distilled to the fixed schedule in its model_index.json
+# (sample_sigmas). mflux has no Turbo entry yet, so the base config loads Turbo's weights and
+# use_turbo_schedule() makes mflux's linear scheduler return that schedule.
+TURBO = os.environ.get("IMAGE_MODEL", "turbo") == "turbo"
+MODEL_ID = "qwen-image-2.1-turbo" if TURBO else "qwen-image-2.1"
+TURBO_REPO = "Qwen/Qwen-Image-2.1-Turbo"
+TURBO_SIGMAS = [1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568]
+DEFAULT_STEPS = len(TURBO_SIGMAS) if TURBO else 40
 DEFAULT_QUANTIZE = int(os.environ.get("IMAGE_QUANTIZE", "8")) or None  # 0 = bf16
 IDLE_UNLOAD = int(os.environ.get("IMAGE_IDLE_UNLOAD", "600"))
 MAX_QUEUE = int(os.environ.get("IMAGE_MAX_QUEUE", "4"))
@@ -139,6 +147,30 @@ def configure_mlx_limits() -> None:
     if MEMORY_LIMIT_GB > 0:
         mx.set_memory_limit(int(MEMORY_LIMIT_GB * GB))
     mx.set_cache_limit(int(CACHE_LIMIT_GB * GB))
+    if TURBO:
+        use_turbo_schedule()
+
+
+def use_turbo_schedule() -> None:
+    """Make mflux's default ("linear") scheduler return Turbo's distilled 8-step sigmas."""
+    import mlx.core as mx
+    from mflux.models.common.config import config as mflux_config
+    from mflux.models.common.schedulers.linear_scheduler import LinearScheduler
+
+    class TurboScheduler(LinearScheduler):
+        def _get_sigmas(self) -> mx.array:
+            return mx.array(TURBO_SIGMAS + [0.0], dtype=mx.float32)
+
+    mflux_config.LinearScheduler = TurboScheduler
+
+
+def model_path() -> str | None:
+    """Local snapshot of the Turbo weights (downloaded ahead with `hf download`); None = mflux's base model."""
+    if not TURBO:
+        return None
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(TURBO_REPO, local_files_only=True)
 
 
 PEAKS_FILE = Path(os.environ.get("IMAGE_PEAKS_FILE", Path.home() / ".image-server-peaks.json"))
@@ -254,12 +286,12 @@ class ModelManager:
         if variant == "edit":
             from mflux.models.qwen21.reference import QwenImage21Edit
 
-            self.model = QwenImage21Edit(quantize=quantize)
+            self.model = QwenImage21Edit(quantize=quantize, model_path=model_path())
         else:
             from mflux.models.common.config import ModelConfig
             from mflux.models.qwen21.variants.txt2img.qwen_image_21 import QwenImage21
 
-            self.model = QwenImage21(quantize=quantize, model_config=ModelConfig.qwen_image_21())
+            self.model = QwenImage21(quantize=quantize, model_path=model_path(), model_config=ModelConfig.qwen_image_21())
         self.variant, self.quantize, self.last_used = variant, quantize, time.time()
         took = time.monotonic() - started
         log.info("loaded in %.1fs", took)
@@ -365,7 +397,7 @@ class CommonRequest(BaseModel):
     n: int = Field(1, ge=1, le=4)
     response_format: Literal["b64_json", "url"] = "b64_json"
     seed: int | None = None
-    steps: int = Field(40, ge=1, le=100)
+    steps: int = Field(DEFAULT_STEPS, ge=1, le=100, description="Ignored for Turbo, which always runs its 8-step schedule")
     guidance: float = Field(1.0, ge=1.0, le=10.0)
     negative_prompt: str | None = None
     transparent: bool = Field(False, description="Ask for an RGBA result with a transparent background")
@@ -535,14 +567,14 @@ async def generate(req: GenerationRequest, request: Request):
     mp = width * height / 1e6
     if req.image is None:
         return await run_jobs(req, request, "edit", mp, lambda _seed: dict(
-            prompt=prompt, num_inference_steps=req.steps, width=width, height=height,
+            prompt=prompt, num_inference_steps=DEFAULT_STEPS if TURBO else req.steps, width=width, height=height,
             guidance=req.guidance, negative_prompt=req.negative_prompt,
         ))
     with tempfile.TemporaryDirectory(prefix="img2img-") as tmp:
         init = decode_image(req.image, "image", Path(tmp))
         # The init image is encoded at the output size, so it doubles the pixels processed.
         return await run_jobs(req, request, "img2img", 2 * mp, lambda _seed: dict(
-            prompt=prompt, num_inference_steps=req.steps, width=width, height=height,
+            prompt=prompt, num_inference_steps=DEFAULT_STEPS if TURBO else req.steps, width=width, height=height,
             guidance=req.guidance, negative_prompt=req.negative_prompt,
             # mflux's image_strength is the fraction of the init image KEPT; the API's
             # strength follows the usual convention (higher = more change).
@@ -560,7 +592,7 @@ async def edit(req: EditRequest, request: Request):
         budget = req.output_resolution ** 2
         mp = (len(refs) * budget + (size[0] * size[1] if size else budget)) / 1e6
         return await run_jobs(req, request, "edit", mp, lambda _seed: dict(
-            prompt=prompt, num_inference_steps=req.steps, guidance=req.guidance,
+            prompt=prompt, num_inference_steps=DEFAULT_STEPS if TURBO else req.steps, guidance=req.guidance,
             negative_prompt=req.negative_prompt, image_paths=refs, output_resolution=req.output_resolution,
             **({"width": size[0], "height": size[1]} if size else {}),
         ))

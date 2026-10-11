@@ -57,9 +57,33 @@ llm-pi-ai:
       models:
         - id: Qwen3.8-Flash-Next-Sushi-3bpw
           name: Qwen3.8 Flash-Next Sushi 3bpw
-          # Text only: sushi turns vision off while experts stream from the SSD.
+          # Reads images: ~/sushi-serve.sh passes --vision (tower +0.9 GB in the SSD budget).
+          # Verified 2026-10-10: answers questions about images (OpenAI image_url parts).
+          input: [ text, image ]
           contextWindow: 262144
           maxTokens: 32000
+
+    # Mellum2.1-12B-A2.5B-Thinking (JetBrains, Apache-2.0) on the Studio: MXFP4 MLX quant served by
+    # mlx_lm.server 0.32 (~/mellum-serve.sh there). Sushi and Splash can't load the mellum architecture.
+    # Server takes no auth; dsh-splash exports a placeholder value.
+    mellum:
+      displayName: Mellum
+      api: openai-completions
+      baseURL: http://__SERVER_IP__:8085/v1
+      apiKeyEnv: SPLASH_API_KEY
+      streamIdleTimeoutMs: 300000
+      defaultContextWindow: 131072
+      defaultMaxTokens: 32768
+      compat:
+        supportsDeveloperRole: true
+        maxTokensField: max_tokens
+      models:
+        - id: randmaru/Mellum2.1-12B-A2.5B-Thinking-mlx-mxfp4
+          name: Mellum 2.1 12B-A2.5B Thinking
+          # Text only. Thinks before answering; JetBrains' sampling (temp 0.6, top_p 0.95,
+          # top_k 20) is the server default.
+          contextWindow: 131072
+          maxTokens: 32768
 
 agent-default-model:
   provider: sushi

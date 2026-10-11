@@ -1,6 +1,6 @@
 ---
 name: __SERVER_NAME__
-description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash or Sushi (the local Qwen LLM servers), claude-splash, opencode-splash, pi-splash or dsh-splash, the SearXNG search stack, local image generation (Qwen-Image, image-server), music generation (ACE-Step, music-server), text classification (GLiNER2.5-Decide, classify-server), or OpenViking agent memory, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
+description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash or Sushi (the local Qwen LLM servers), claude-splash, opencode-splash, pi-splash or dsh-splash, the SearXNG search stack, local image generation (Qwen-Image, image-server), Mellum, music generation (ACE-Step, music-server), text classification (GLiNER2.5-Decide, classify-server), or OpenViking agent memory, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
 ---
 
 # Managing the Mac Studio
@@ -46,13 +46,14 @@ foreground, not in the background, so the URL reaches you.
 |---|---|---|---|
 | **Splash** (Qwen3.8-27B LLM) | `http://__SERVER_IP__:8000` (OpenAI `/v1/chat/completions` and Anthropic `/v1/messages`) | Foreground `splash serve` in a login shell, **not a service** | see below |
 | **Sushi** (Qwen3.8-Flash-Next-Sushi-3bpw) | `http://__SERVER_IP__:8084` (OpenAI `/v1/chat/completions`, Anthropic `/v1/messages`; API key required, `/health` open) | Foreground `~/sushi-serve.sh` via nohup, **not a service**; log `~/sushi.log` | see below |
+| **Mellum** (Mellum2.1-12B-A2.5B-Thinking, Apache-2.0) | `http://__SERVER_IP__:8085/v1` (OpenAI `/v1/chat/completions`; no auth) | Foreground `~/mellum-serve.sh` via nohup, **not a service**; log `~/mellum.log` | see below |
 | **SearXNG** + Valkey | `http://__SERVER_NAME__.__TAILNET__:8889` (`/search?q=…&format=json`) | Docker Compose on Colima, published with `tailscale serve` | `~/searxng-stack/searxng.sh up\|down\|restart\|status\|logs\|test` |
-| **image-server** (Qwen-Image 2.1 via mflux) | `http://__SERVER_NAME__.__TAILNET__:8890` (`POST /v1/images/generations`, OpenAI-style) | LaunchAgent `com.searxng-stack.image-server`; model loads on demand | `~/searxng-stack/image-server/image-server.sh install\|status\|logs\|restart\|unload\|test` |
+| **image-server** (Qwen-Image 2.1 Turbo via mflux) | `http://__SERVER_NAME__.__TAILNET__:8890` (`POST /v1/images/generations`, OpenAI-style) | LaunchAgent `com.searxng-stack.image-server`; model loads on demand | `~/searxng-stack/image-server/image-server.sh install\|status\|logs\|restart\|unload\|test` |
 | **music-server** (ACE-Step 1.5, MIT) | `http://__SERVER_NAME__.__TAILNET__:8891` (`POST /v1/music/generations`) | LaunchAgent `com.searxng-stack.music-server`; starts ACE-Step (`~/ace-step`) on demand | `~/searxng-stack/music-server/music-server.sh install\|status\|logs\|restart\|unload\|test` |
 | **classify-server** (GLiNER2.5-Decide, Apache-2.0) | `http://__SERVER_NAME__.__TAILNET__:8892` (`POST /v1/classify`) | LaunchAgent `com.searxng-stack.classify-server`; model stays loaded | `~/searxng-stack/classify-server/classify-server.sh install\|status\|logs\|restart\|test` |
 | **OpenViking** (agent memory, AGPL-3.0) | `http://__SERVER_NAME__.__TAILNET__:1933` (API key required; `/health` is open) | LaunchAgent `com.openviking.server`, published with `tailscale serve` | see below |
 | **Colima** (Docker VM: 2 CPU, 2 GB) | — | `brew services` LaunchAgent, starts at login | `colima status\|start\|stop` |
-| **Ollama** | `127.0.0.1:11434`, local to the Studio only | macOS app | serves OpenViking's embeddings |
+| **Ollama** | `127.0.0.1:11434`, local to the Studio only | macOS app | serves OpenViking's embeddings (`embeddinggemma-2:270m-bf16-text`) |
 
 The SearXNG stack is a git checkout of `github.com/chan4lk/searxng-stack`. To
 update it: `cd ~/searxng-stack && git pull && ./searxng.sh restart`. Its `.env`
@@ -112,6 +113,8 @@ dsh's default model since 2026-10-09 (provider `sushi` in `~/.dsh/splash.setting
 
 - **Start:** `nohup ~/sushi-serve.sh > ~/sushi.log 2>&1 &`. It binds `__SERVER_IP__:8084` with 4-bit KV and 256K
   context. Like Splash it isn't supervised and doesn't survive a reboot; **ask before stopping it.**
+- **Vision:** the script passes `--vision` (image tower +0.9 GB inside the SSD budget), so the dsh entry declares
+  `input: [ text, image ]`. Verified 2026-10-10: it answers questions about images (OpenAI `image_url` parts).
 - **Key:** `~/.sushi/api-key` on the Studio (passed by `--api-key-env`), copied to the MacBook's `~/.sushi-api-key`;
   the `dsh-splash` alias exports it as `SUSHI_API_KEY`. Without it: 401.
 - **Memory:** the weights don't fit resident beside the other services, so routed experts stream from the SSD
@@ -125,6 +128,23 @@ dsh's default model since 2026-10-09 (provider `sushi` in `~/.dsh/splash.setting
   (`launchctl bootout` for the three LaunchAgents; `launchctl bootstrap gui/$(id -u)
   ~/Library/LaunchAgents/com.searxng-stack.<name>.plist` brings one back). With Splash off, OpenViking's
   summaries and memory extraction fail until Splash runs again.
+
+### Mellum
+
+JetBrains' `Mellum2.1-12B-A2.5B-Thinking` (Apache-2.0; MoE, 64 experts top-8, 128K context, 3 of 4 layers
+sliding-window) for coding and agentic tool use. Its `mellum` architecture is new: Sushi and Splash can't load it,
+and mlx-lm 0.32.0 is the first release that can. It runs `mlx_lm.server` from `~/mellum/.venv` (uv, `mlx-lm==0.32.0`)
+on the MXFP4 MLX quant `randmaru/Mellum2.1-12B-A2.5B-Thinking-mlx-mxfp4` (6.5 GB, in the HF cache).
+
+- **Start:** `nohup ~/mellum-serve.sh > ~/mellum.log 2>&1 &`. It binds `__SERVER_IP__:8085` with JetBrains'
+  sampling (temp 0.6, top_p 0.95, top_k 20) and `HF_HUB_OFFLINE=1`. Not supervised, gone after a reboot;
+  **ask before stopping it.** Model id: `randmaru/Mellum2.1-12B-A2.5B-Thinking-mlx-mxfp4`.
+- **API:** thinking comes back in `message.reasoning`, tool calls in `tool_calls` (both verified 2026-10-11).
+- **dsh:** provider `mellum` in `~/.dsh/splash.settings.yaml`, text only; pick it in the model picker. A dsh
+  headless read-fix-run task took 17.6 s.
+- **Memory:** ~3 GB RSS beside Sushi (19% free, ~1.7 GB swap used with both up).
+- Official GGUFs (`JetBrains/Mellum2.1-12B-A2.5B-Thinking-GGUF`) need a llama.cpp that knows `mellum`; the
+  Studio's Ollama 0.40.2 is untested with them.
 
 ### claude-splash, opencode-splash, pi-splash (MacBook)
 
@@ -218,17 +238,22 @@ logs to `~/Library/Logs/openviking.log`. It uses ~450 MB of RAM.
 - **Config:** `~/.openviking/ov.conf` (chmod 600, holds `server.root_api_key`).
   It binds 127.0.0.1:1933 in `api_key` auth mode, with account and user
   `chandima`.
-- **Embeddings:** Ollama `qwen3-embedding:0.6b-8k`, 1024 dimensions. It's a
-  custom 8K-context variant of `qwen3-embedding:0.6b` that uses 2.9 GB instead
-  of 5.8 GB and unloads after 5 idle minutes. It goes through the `openai`
-  provider at `http://127.0.0.1:11434/v1`, with `encoding_format: float`.
+- **Embeddings:** Ollama `embeddinggemma-2:270m-bf16-text`, 768 dimensions
+  (since 2026-10-10; before that `qwen3-embedding:0.6b-8k`, 1024, whose
+  vectors are kept in `~/.openviking/data/vectordb.qwen3-1024.bak`). It goes
+  through the `openai` provider at `http://127.0.0.1:11434/v1`, with
+  `encoding_format: float`.
 - **LLM:** Splash, `incoai/Qwen3.8-27B-Splash`, with
   `extra_request_body: {"reasoning_effort": "none"}` and a 900 s timeout.
   Summaries and memory extraction queue behind chat turns. They 404 while
   another Splash model is loaded.
 - **Changing the embedding model name** fails at startup with
   `EmbeddingRebuildRequiredError`. If the vectors are identical, start once
-  with `embedding.allow_metadata_override=true`, then remove it.
+  with `embedding.allow_metadata_override=true`, then remove it. A new model
+  or dimension needs a rebuild: move the vector DB aside, restart, then
+  `ov reindex <uri> --mode vectors_only --wait true` for `viking://user/chandima`,
+  `viking://resources` and each `viking://agent/…`, with the user API key (the
+  root key is denied tenant data).
 - **Managing it:** `launchctl kickstart -k gui/$(id -u)/com.openviking.server`
   restarts it, `launchctl print …` shows status (ask before `bootout`), and
   `~/openviking/.venv/bin/openviking-server doctor` checks the config.
@@ -247,6 +272,14 @@ and edits; `img2img` loads only for `image` + `strength` variations and swaps
 `edit` out. Requests run one at a time, and after 4 are waiting, new ones get
 `429`. mflux is pinned to commit acdfc98 (reference editing isn't in a release
 yet).
+
+**Turbo (default since 2026-10-10):** `IMAGE_MODEL=turbo` loads
+`Qwen/Qwen-Image-2.1-Turbo` (same architecture, distilled to a fixed 8-step
+schedule; `server.py` swaps mflux's linear scheduler for its sigmas). Turbo
+ignores `steps`. `IMAGE_MODEL=base ./image-server.sh install` goes back to
+40-step Qwen-Image 2.1. The 32 GB snapshot is in the Studio's HF cache. The
+timings and peaks below were measured on the base model; Turbo's are not yet
+measured, and the service needs `./image-server.sh install` once to pick it up.
 
 | Task | Endpoint | Body |
 |---|---|---|
@@ -287,8 +320,8 @@ neither value reached it: re-run `./install.sh` and restart dsh.
 
 The chat UI only draws images on `read_image`'s own card, so when the current
 model accepts images, the result tells the agent to call `read_image` on the
-saved file. Only the 35B-A3B entry declares image input (`input: [text, image]`
-in `splash.settings.yaml`); on the 27B the image is saved but not shown.
+saved file. The Sushi and 35B-A3B entries declare image input (`input: [text, image]`
+in `splash.settings.yaml`); on the 27B and Mellum the image is saved but not shown.
 
 ### music-server
 
@@ -357,6 +390,11 @@ only: in Claude Code, the 'ask first' rules below still apply.
 - **Freeing memory by stopping something.** An image-server 503 means: report the numbers to the user and stop. Never kill Splash or the user's own jobs (e.g. an OCR `llama-server`) to make room.
 - **Deleting or overwriting files, or stopping services, without asking.** The Studio is shared infrastructure, so confirm these first. Read-only checks such as `health`, `status` and `logs` are fine without asking.
 - **Trusting `brew services list`.** It can show Colima as `stopped` while the VM is running. Check with `colima status`.
+- **Downloading from Hugging Face.** The xet backend stalls at 0 bytes on the Studio: use
+  `HF_HUB_DISABLE_XET=1 hf download …` (~5–7 MB/s). The HF token is in `~/.cache/huggingface/token`.
+  Run long downloads with nohup: `studio.sh` gives up after 300 s.
+- **`studio.sh copy` (scp) can hang** with no prompt. Push a small file instead with
+  `studio.sh run "echo '<base64>' | base64 -d > FILE"` and check `shasum` on both ends.
 - **Installing packages.** Use `HOMEBREW_NO_AUTO_UPDATE=1 NONINTERACTIVE=1 brew install …`. A `brew install` that waits for input hangs the SSH session.
 - **Opening SearXNG to the internet.** Its bot limiter is off because it's reached only from the tailnet. Never bind it to `0.0.0.0` or enable `tailscale funnel`. The same goes for OpenViking.
 - **Blaming the MacBook's DNS when a `…ts.net` URL fails.** Check the Studio's current name first: `tailscale status --json` → the peer's `DNSName`. See Machine.

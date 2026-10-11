@@ -1,6 +1,6 @@
 ---
 name: __SERVER_NAME__
-description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash or Sushi (the local Qwen LLM servers), claude-splash, opencode-splash, pi-splash or dsh-splash, the SearXNG search stack, local image generation (Qwen-Image, image-server), Mellum, music generation (ACE-Step, music-server), text classification (GLiNER2.5-Decide, classify-server), or OpenViking agent memory, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
+description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash or Sushi (the local Qwen LLM servers), claude-splash, opencode-splash, pi-splash or dsh-splash, the SearXNG search stack, local image generation (Qwen-Image, image-server), Mellum, Ornith, music generation (ACE-Step, music-server), text classification (GLiNER2.5-Decide, classify-server), or OpenViking agent memory, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
 ---
 
 # Managing the Mac Studio
@@ -47,6 +47,7 @@ foreground, not in the background, so the URL reaches you.
 | **Splash** (Qwen3.8-27B LLM) | `http://__SERVER_IP__:8000` (OpenAI `/v1/chat/completions` and Anthropic `/v1/messages`) | Foreground `splash serve` in a login shell, **not a service** | see below |
 | **Sushi** (Qwen3.8-Flash-Next-Sushi-3bpw) | `http://__SERVER_IP__:8084` (OpenAI `/v1/chat/completions`, Anthropic `/v1/messages`; API key required, `/health` open) | Foreground `~/sushi-serve.sh` via nohup, **not a service**; log `~/sushi.log` | see below |
 | **Mellum** (Mellum2.1-12B-A2.5B-Thinking, Apache-2.0) | `http://__SERVER_IP__:8085/v1` (OpenAI `/v1/chat/completions`; no auth) | Foreground `~/mellum-serve.sh` via nohup, **not a service**; log `~/mellum.log` | see below |
+| **Ornith** (Ornith-1.5-35B-A3B, MIT) | `http://__SERVER_IP__:8086/v1` (OpenAI and Anthropic APIs; Sushi's API key) | Foreground `~/ornith-serve.sh` (Splash) via nohup, **not a service**; log `~/ornith.log` | see below |
 | **SearXNG** + Valkey | `http://__SERVER_NAME__.__TAILNET__:8889` (`/search?q=…&format=json`) | Docker Compose on Colima, published with `tailscale serve` | `~/searxng-stack/searxng.sh up\|down\|restart\|status\|logs\|test` |
 | **image-server** (Qwen-Image 2.1 Turbo via mflux) | `http://__SERVER_NAME__.__TAILNET__:8890` (`POST /v1/images/generations`, OpenAI-style) | LaunchAgent `com.searxng-stack.image-server`; model loads on demand | `~/searxng-stack/image-server/image-server.sh install\|status\|logs\|restart\|unload\|test` |
 | **music-server** (ACE-Step 1.5, MIT) | `http://__SERVER_NAME__.__TAILNET__:8891` (`POST /v1/music/generations`) | LaunchAgent `com.searxng-stack.music-server`; starts ACE-Step (`~/ace-step`) on demand | `~/searxng-stack/music-server/music-server.sh install\|status\|logs\|restart\|unload\|test` |
@@ -145,6 +146,37 @@ on the MXFP4 MLX quant `randmaru/Mellum2.1-12B-A2.5B-Thinking-mlx-mxfp4` (6.5 GB
 - **Memory:** ~3 GB RSS beside Sushi (19% free, ~1.7 GB swap used with both up).
 - Official GGUFs (`JetBrains/Mellum2.1-12B-A2.5B-Thinking-GGUF`) need a llama.cpp that knows `mellum`; the
   Studio's Ollama 0.40.2 is untested with them.
+
+### Ornith
+
+`Ornith-1.5-35B-A3B` (MIT; ornith-ai's self-improvement fine-tune of Qwen3.6-35B-A3B, same `qwen3_5_moe`
+architecture, ~3B active; its card claims SWE-bench Verified 79 vs 73.4 for the base). A second Splash process
+on port 8086 serves the official Q4_K_M GGUF with its vision projector and Splash's DFlash2 draft
+`incoai/Qwen3.6-35B-A3B-DFlash2`.
+
+- **Start:** `nohup ~/ornith-serve.sh > ~/ornith.log 2>&1 &` (`HF_HUB_OFFLINE=1`, model
+  `local/Ornith-1.5-35B-A3B-GGUF:Q4_K_M`, served name `Ornith-1.5-35B-A3B`, API key from `~/.sushi/api-key`).
+  Not supervised; **ask before stopping it.** The first start hashes the 20 GiB file once (~30 s), then loads in ~20 s.
+- **dsh:** provider `ornith` in `~/.dsh/splash.settings.yaml`, `input: [ text, image ]`.
+- **Measured 2026-10-11** (Mellum also up, Sushi off): ~175 tok/s (894 tokens in 5.1 s), tool call ~1 s,
+  image question ~7 s, dsh headless read-fix-run task 11.9 s. 59% memory free with both up.
+- **The GGUF is patched.** Splash 1.1.0 loads GDN `ssm_alpha`/`ssm_beta` only as Q8_0, F32 or BF16
+  (`libexec/install/gguf.py`), and the official `ornith-ai/Ornith-1.5-35B-A3B-GGUF` stores them as Q4_K.
+  `~/ornith/gguf_ssm_f32.py SRC DST` (run with `~/mellum/.venv/bin/python -I`, which has `gguf`) rewrites
+  those 60 tensors as F32 (exact dequantization) and copies the other 693 byte for byte. The result is a
+  local cache repo, `~/.cache/huggingface/hub/models--local--Ornith-1.5-35B-A3B-GGUF/`, with `refs/main`
+  naming a made-up 40-hex snapshot that also holds the mmproj (hard link). The untouched download is still in
+  `models--ornith-ai--Ornith-1.5-35B-A3B-GGUF` (20 GiB).
+- **Splash takes only a repo id** (`OWNER/REPO[:VARIANT]`), never a local path. A local cache repo like the
+  one above works with `HF_HUB_OFFLINE=1`.
+- **What didn't work (2026-10-11):**
+  - sushi 1.2.1 serves only `qwen4_exp`, `mimo_v2` and `glm5_next` (`ArchitectureUnsupported`), though its
+    source mentions `qwen3_5_moe`.
+  - The oMLX build `scottlowry/Ornith-1.5-35B-A3B-oQ4e-mtp` (deleted): Splash rejects its mixed 5/6/8-bit
+    layers (`unsupported affine quantization for …linear_attn.in_proj_qkv`), and its config spells
+    `rope_parameters.type` instead of `rope_type`.
+  - Ornith's own `ornith-ai/Ornith-1.5-35B-A3B-DFlash` (742 MB, still cached) is a DFlash v1 draft; Splash
+    needs DFlash2.
 
 ### claude-splash, opencode-splash, pi-splash (MacBook)
 

@@ -85,6 +85,26 @@ llm-pi-ai:
           contextWindow: 131072
           maxTokens: 32768
 
+    # Ornith-1.5-35B-A3B (MIT; Qwen3.6-35B-A3B fine-tune for coding and agents) served by Splash on the
+    # Studio (~/ornith-serve.sh there; official GGUF Q4_K_M + mmproj). Same key as Sushi.
+    ornith:
+      displayName: Ornith
+      api: openai-completions
+      baseURL: http://__SERVER_IP__:8086/v1
+      apiKeyEnv: SUSHI_API_KEY
+      streamIdleTimeoutMs: 300000
+      defaultContextWindow: 262144
+      defaultMaxTokens: 32000
+      compat:
+        supportsDeveloperRole: true
+        maxTokensField: max_tokens
+      models:
+        - id: Ornith-1.5-35B-A3B
+          name: Ornith 1.5 35B-A3B
+          input: [ text, image ]
+          contextWindow: 262144
+          maxTokens: 32000
+
 agent-default-model:
   provider: sushi
   model: Qwen3.8-Flash-Next-Sushi-3bpw

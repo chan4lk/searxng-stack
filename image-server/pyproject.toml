@@ -1,7 +1,7 @@
 [project]
 name = "image-server"
 version = "0.1.0"
-description = "On-demand Qwen-Image 2.1 Turbo (mflux/MLX) behind an OpenAI-style images API"
+description = "On-demand Qwen-Image 2.1 and 2.1 Turbo (mflux/MLX) behind an OpenAI-style images API"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "mflux @ git+https://github.com/filipstrand/mflux@acdfc98ba76893afe055b85ee39590cc966a9d43",  # reference editing (PR #741), not yet in a release

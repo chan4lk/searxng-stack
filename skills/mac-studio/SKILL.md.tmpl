@@ -311,15 +311,15 @@ and edits; `img2img` loads only for `image` + `strength` variations and swaps
 `429`. mflux is pinned to commit acdfc98 (reference editing isn't in a release
 yet).
 
-**Turbo (default since 2026-10-10):** `IMAGE_MODEL=turbo` loads
-`Qwen/Qwen-Image-2.1-Turbo` (same architecture, distilled to a fixed 8-step
-schedule; `server.py` swaps mflux's linear scheduler for its sigmas). Turbo
-ignores `steps`. `IMAGE_MODEL=base ./image-server.sh install` goes back to
-40-step Qwen-Image 2.1. The 32 GB snapshot (preview `assets/` skipped) is in the
-Studio's HF cache. Measured 2026-10-11 in 8-bit with Sushi stopped: load 5.4 s,
-1024² ~17 s (8 × 1.5 s/step), 512² ~5.6 s; text renders cleanly. Same
-architecture, so the peaks below still apply. The other timings below are the base
-model's.
+**Two models, chosen per request (since 2026-10-13):** `"model": "turbo"` (Qwen-Image-2.1-Turbo,
+distilled to a fixed 8-step schedule, ignores `steps`) or `"model": "base"` (Qwen-Image 2.1, `steps`
+default 40). Omitted, `IMAGE_MODEL` (default `base` since 2026-10-13, at the user's request) decides. One model is resident at a time; asking
+for the other reloads it (~7–9 s). `server.py` swaps mflux's linear scheduler for Turbo's sigmas only
+while Turbo runs. Both snapshots (~31–32 GB each, Turbo's preview `assets/` skipped) are in the
+Studio's HF cache. Measured 2026-10-13, 1024² 8-bit, same seed: Turbo 15–17 s, base 62 s, both
+peak 29.5 GB. Base gives visibly better detail (background, skin, lighting); the user found Turbo's
+quality not good enough for finals. The dsh tools take `model` too. Same architecture, so the
+peaks below apply to both. The other timings below are the base model's at 512².
 
 | Task | Endpoint | Body |
 |---|---|---|

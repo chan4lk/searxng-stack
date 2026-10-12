@@ -1,6 +1,9 @@
 """On-demand image generation API for Apple silicon.
 
-Serves Qwen-Image 2.1 (Turbo by default, IMAGE_MODEL=base for the 40-step model) through mflux (MLX) behind OpenAI-style endpoints:
+Serves Qwen-Image 2.1 through mflux (MLX) behind OpenAI-style endpoints. Each request
+picks the checkpoint with `model`: "turbo" (8 fixed steps, fast) or "base" (40 steps,
+better detail); IMAGE_MODEL sets the default. One model is resident at a time, so a
+request for the other one reloads (~5-20 s).
 
 - POST /v1/images/generations   text-to-image; optional transparent (RGBA)
                                 output; optional `image` + `strength` for
@@ -43,15 +46,19 @@ from pydantic import BaseModel, Field, field_validator
 log = logging.getLogger("image-server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-# IMAGE_MODEL picks the checkpoint: "turbo" (Qwen-Image-2.1-Turbo, 8 steps) or "base" (Qwen-Image-2.1, ~40 steps).
-# Turbo has the same architecture as the base model, distilled to the fixed schedule in its model_index.json
-# (sample_sigmas). mflux has no Turbo entry yet, so the base config loads Turbo's weights and
-# use_turbo_schedule() makes mflux's linear scheduler return that schedule.
-TURBO = os.environ.get("IMAGE_MODEL", "turbo") == "turbo"
-MODEL_ID = "qwen-image-2.1-turbo" if TURBO else "qwen-image-2.1"
+# Two checkpoints of the same architecture: "turbo" (Qwen-Image-2.1-Turbo, distilled to the fixed 8-step
+# schedule in its model_index.json, sample_sigmas) and "base" (Qwen-Image-2.1, ~40 steps). mflux has no
+# Turbo entry yet, so the base config loads Turbo's weights and use_turbo_schedule() makes mflux's linear
+# scheduler return that schedule while Turbo runs. IMAGE_MODEL picks the default; requests override it.
+MODEL_IDS = {"turbo": "qwen-image-2.1-turbo", "base": "qwen-image-2.1"}
+DEFAULT_MODEL = os.environ.get("IMAGE_MODEL", "base")
+if DEFAULT_MODEL not in MODEL_IDS:
+    raise SystemExit(f"IMAGE_MODEL must be one of {', '.join(MODEL_IDS)}, not {DEFAULT_MODEL!r}")
+ModelName = Literal["turbo", "base"]
 TURBO_REPO = "Qwen/Qwen-Image-2.1-Turbo"
 TURBO_SIGMAS = [1.0, 0.978453, 0.95418, 0.926626, 0.89508, 0.845148, 0.704534, 0.414568]
-DEFAULT_STEPS = len(TURBO_SIGMAS) if TURBO else 40
+TURBO_STEPS = len(TURBO_SIGMAS)
+BASE_STEPS = 40
 DEFAULT_QUANTIZE = int(os.environ.get("IMAGE_QUANTIZE", "8")) or None  # 0 = bf16
 IDLE_UNLOAD = int(os.environ.get("IMAGE_IDLE_UNLOAD", "600"))
 MAX_QUEUE = int(os.environ.get("IMAGE_MAX_QUEUE", "4"))
@@ -147,26 +154,31 @@ def configure_mlx_limits() -> None:
     if MEMORY_LIMIT_GB > 0:
         mx.set_memory_limit(int(MEMORY_LIMIT_GB * GB))
     mx.set_cache_limit(int(CACHE_LIMIT_GB * GB))
-    if TURBO:
-        use_turbo_schedule()
+    use_turbo_schedule()
+
+
+# Set by ModelManager.generate on the worker thread; mflux builds a scheduler per generation.
+turbo_schedule = False
 
 
 def use_turbo_schedule() -> None:
-    """Make mflux's default ("linear") scheduler return Turbo's distilled 8-step sigmas."""
+    """Make mflux's default ("linear") scheduler return Turbo's distilled 8-step sigmas while Turbo runs."""
     import mlx.core as mx
     from mflux.models.common.config import config as mflux_config
     from mflux.models.common.schedulers.linear_scheduler import LinearScheduler
 
     class TurboScheduler(LinearScheduler):
         def _get_sigmas(self) -> mx.array:
+            if not turbo_schedule:
+                return super()._get_sigmas()
             return mx.array(TURBO_SIGMAS + [0.0], dtype=mx.float32)
 
     mflux_config.LinearScheduler = TurboScheduler
 
 
-def model_path() -> str | None:
+def model_path(name: ModelName) -> str | None:
     """Local snapshot of the Turbo weights (downloaded ahead with `hf download`); None = mflux's base model."""
-    if not TURBO:
+    if name != "turbo":
         return None
     from huggingface_hub import snapshot_download
 
@@ -252,48 +264,49 @@ class ModelManager:
 
     def __init__(self) -> None:
         self.model = None
+        self.name: ModelName | None = None
         self.variant: Variant | None = None
         self.quantize: int | None = None
         self.last_used: float | None = None
 
-    def load(self, variant: Variant, quantize: int | None, bucket: int = 2) -> tuple[float, int | None]:
+    def load(self, name: ModelName, variant: Variant, quantize: int | None, bucket: int = 2) -> tuple[float, int | None]:
         """Load `variant`, stepping down the quantization if memory is short.
 
         Returns (seconds spent loading, quantization actually loaded).
         """
         # Reuse the resident model if it's at the requested level or one the guard
         # would step down to anyway; reloading just to fail the same check churns.
-        if self.model is not None and self.variant == variant and self.quantize in fallback_chain(quantize):
+        if self.model is not None and self.name == name and self.variant == variant and self.quantize in fallback_chain(quantize):
             return 0.0, self.quantize
         self.unload()
         if not MEMORY_GUARD:
-            return self._load(variant, quantize), quantize
+            return self._load(name, variant, quantize), quantize
         free = available_gb()
         for q in fallback_chain(quantize):
             need = expected_peak_gb(variant, q, bucket) + HEADROOM_GB
             if free >= need:
                 if q != quantize:
                     log.warning("memory guard: %.1f GB available, stepping %s -> %s", free, quantize, q)
-                return self._load(variant, q), q
+                return self._load(name, variant, q), q
         need = expected_peak_gb(variant, fallback_chain(quantize)[-1], bucket) + HEADROOM_GB
         raise MemoryGuardError(
             f"not enough free memory to load the {variant} model: ~{need:.0f} GB needed "
             f"(peak estimate + {HEADROOM_GB:.0f} GB headroom), {free:.1f} GB available. {NO_SELF_REMEDY}"
         )
 
-    def _load(self, variant: Variant, quantize: int | None) -> float:
+    def _load(self, name: ModelName, variant: Variant, quantize: int | None) -> float:
         started = time.monotonic()
-        log.info("loading %s variant=%s quantize=%s", MODEL_ID, variant, quantize)
+        log.info("loading %s variant=%s quantize=%s", MODEL_IDS[name], variant, quantize)
         if variant == "edit":
             from mflux.models.qwen21.reference import QwenImage21Edit
 
-            self.model = QwenImage21Edit(quantize=quantize, model_path=model_path())
+            self.model = QwenImage21Edit(quantize=quantize, model_path=model_path(name))
         else:
             from mflux.models.common.config import ModelConfig
             from mflux.models.qwen21.variants.txt2img.qwen_image_21 import QwenImage21
 
-            self.model = QwenImage21(quantize=quantize, model_path=model_path(), model_config=ModelConfig.qwen_image_21())
-        self.variant, self.quantize, self.last_used = variant, quantize, time.time()
+            self.model = QwenImage21(quantize=quantize, model_path=model_path(name), model_config=ModelConfig.qwen_image_21())
+        self.name, self.variant, self.quantize, self.last_used = name, variant, quantize, time.time()
         took = time.monotonic() - started
         log.info("loaded in %.1fs", took)
         return took
@@ -303,17 +316,18 @@ class ModelManager:
             return False
         import mlx.core as mx
 
-        log.info("unloading %s variant=%s", MODEL_ID, self.variant)
-        self.model = self.variant = self.quantize = None
+        log.info("unloading %s variant=%s", MODEL_IDS.get(self.name, self.name), self.variant)
+        self.model = self.name = self.variant = self.quantize = None
         gc.collect()
         mx.clear_cache()
         return True
 
-    def generate(self, *, variant: Variant, quantize: int | None, megapixels: float, **kwargs):
+    def generate(self, *, name: ModelName, variant: Variant, quantize: int | None, megapixels: float, **kwargs):
+        global turbo_schedule
         import mlx.core as mx
 
         bucket = workload_bucket(megapixels)
-        load_seconds, quantize = self.load(variant, quantize, bucket)
+        load_seconds, quantize = self.load(name, variant, quantize, bucket)
         assert self.model is not None
         # Generation needs working memory on top of the resident weights.
         working = max(0.0, expected_peak_gb(variant, quantize, bucket) - mx.get_active_memory() / GB)
@@ -325,9 +339,11 @@ class ModelManager:
             )
         mx.reset_peak_memory()
         started = time.monotonic()
+        turbo_schedule = name == "turbo"
         try:
             result = self.model.generate_image(**kwargs)
         finally:
+            turbo_schedule = False
             mx.clear_cache()
         peak = mx.get_peak_memory() / GB
         key = (variant, quantize, bucket)
@@ -392,17 +408,43 @@ def wrap_transparent(prompt: str, transparent: bool) -> str:
     return f"{TRANSPARENT_PREFIX}{prompt}{TRANSPARENT_SUFFIX}" if transparent else prompt
 
 
+def resolve_model(value: str) -> ModelName | None:
+    """Short name ("turbo"/"base") or full id ("qwen-image-2.1-turbo") -> short name."""
+    v = value.strip().lower()
+    if v in MODEL_IDS:
+        return v  # type: ignore[return-value]
+    return next((k for k, mid in MODEL_IDS.items() if mid == v), None)
+
+
 class CommonRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=4000)
-    model: str | None = None
+    model: str | None = Field(None, description='"turbo" (8 fixed steps, fast) or "base" (40 steps, better detail); full ids work too. Default from IMAGE_MODEL')
     n: int = Field(1, ge=1, le=4)
     response_format: Literal["b64_json", "url"] = "b64_json"
     seed: int | None = None
-    steps: int = Field(DEFAULT_STEPS, ge=1, le=100, description="Ignored for Turbo, which always runs its 8-step schedule")
+    steps: int | None = Field(None, ge=1, le=100, description=f"Base model only (default {BASE_STEPS}); Turbo always runs its {TURBO_STEPS}-step schedule")
     guidance: float = Field(1.0, ge=1.0, le=10.0)
     negative_prompt: str | None = None
     transparent: bool = Field(False, description="Ask for an RGBA result with a transparent background")
     quantize: Literal[0, 4, 8] | None = Field(None, description="0 = bf16; default from IMAGE_QUANTIZE")
+
+    @field_validator("model")
+    @classmethod
+    def check_model(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        name = resolve_model(v)
+        if name is None:
+            raise ValueError(f"model must be one of {', '.join([*MODEL_IDS, *MODEL_IDS.values()])}")
+        return name
+
+    @property
+    def model_name(self) -> ModelName:
+        return self.model or DEFAULT_MODEL  # type: ignore[return-value]
+
+    @property
+    def num_steps(self) -> int:
+        return TURBO_STEPS if self.model_name == "turbo" else (self.steps or BASE_STEPS)
 
 
 class GenerationRequest(CommonRequest):
@@ -445,7 +487,7 @@ async def run_jobs(req: CommonRequest, request: Request, variant: Variant, megap
             def run(seed=base_seed + i):
                 state["busy"] = True
                 try:
-                    return manager.generate(variant=variant, quantize=quantize, megapixels=megapixels, seed=seed, **kwargs_for(seed))
+                    return manager.generate(name=req.model_name, variant=variant, quantize=quantize, megapixels=megapixels, seed=seed, **kwargs_for(seed))
                 finally:
                     state["busy"] = False
 
@@ -476,7 +518,8 @@ async def run_jobs(req: CommonRequest, request: Request, variant: Variant, megap
                          "transparent_fraction": transparent_fraction(image)})
         return {
             "created": int(time.time()),
-            "model": MODEL_ID,
+            "model": MODEL_IDS[req.model_name],
+            "steps": req.num_steps,
             "variant": variant,
             "quantize": quantize,
             "data": data,
@@ -518,8 +561,9 @@ app = FastAPI(title="image-server", version="0.4.0", lifespan=lifespan)
 @app.get("/health")
 async def health():
     return {
-        "model": MODEL_ID,
+        "model": MODEL_IDS[DEFAULT_MODEL],
         "loaded": manager.model is not None,
+        "loaded_model": MODEL_IDS.get(manager.name) if manager.name else None,
         "variant": manager.variant,
         "quantize": manager.quantize,
         "default_quantize": DEFAULT_QUANTIZE,
@@ -542,18 +586,23 @@ async def health():
 
 @app.get("/v1/models")
 async def models():
-    return {"object": "list", "data": [{"id": MODEL_ID, "object": "model", "owned_by": "mflux",
-                                        "capabilities": ["generate", "transparent", "img2img", "edit", "multi-reference"]}]}
+    return {"object": "list", "data": [{"id": mid, "object": "model", "owned_by": "mflux", "default": name == DEFAULT_MODEL,
+                                        "steps": TURBO_STEPS if name == "turbo" else BASE_STEPS,
+                                        "capabilities": ["generate", "transparent", "img2img", "edit", "multi-reference"]}
+                                       for name, mid in MODEL_IDS.items()]}
 
 
 @app.post("/v1/load")
-async def load(variant: Variant = "edit", quantize: Literal[0, 4, 8] | None = None):
+async def load(variant: Variant = "edit", quantize: Literal[0, 4, 8] | None = None, model: str | None = None):
     q = DEFAULT_QUANTIZE if quantize is None else (quantize or None)
+    name = DEFAULT_MODEL if model is None else resolve_model(model)
+    if name is None:
+        raise HTTPException(422, f"model must be one of {', '.join([*MODEL_IDS, *MODEL_IDS.values()])}")
     try:
-        took, used = await on_worker(manager.load, variant, q, 2)
+        took, used = await on_worker(manager.load, name, variant, q, 2)
     except MemoryGuardError as error:
         raise HTTPException(503, str(error)) from error
-    return {"loaded": True, "variant": variant, "quantize": used, "load_seconds": round(took, 1)}
+    return {"loaded": True, "model": MODEL_IDS[name], "variant": variant, "quantize": used, "load_seconds": round(took, 1)}
 
 
 @app.post("/v1/unload")
@@ -568,14 +617,14 @@ async def generate(req: GenerationRequest, request: Request):
     mp = width * height / 1e6
     if req.image is None:
         return await run_jobs(req, request, "edit", mp, lambda _seed: dict(
-            prompt=prompt, num_inference_steps=DEFAULT_STEPS if TURBO else req.steps, width=width, height=height,
+            prompt=prompt, num_inference_steps=req.num_steps, width=width, height=height,
             guidance=req.guidance, negative_prompt=req.negative_prompt,
         ))
     with tempfile.TemporaryDirectory(prefix="img2img-") as tmp:
         init = decode_image(req.image, "image", Path(tmp))
         # The init image is encoded at the output size, so it doubles the pixels processed.
         return await run_jobs(req, request, "img2img", 2 * mp, lambda _seed: dict(
-            prompt=prompt, num_inference_steps=DEFAULT_STEPS if TURBO else req.steps, width=width, height=height,
+            prompt=prompt, num_inference_steps=req.num_steps, width=width, height=height,
             guidance=req.guidance, negative_prompt=req.negative_prompt,
             # mflux's image_strength is the fraction of the init image KEPT; the API's
             # strength follows the usual convention (higher = more change).
@@ -593,7 +642,7 @@ async def edit(req: EditRequest, request: Request):
         budget = req.output_resolution ** 2
         mp = (len(refs) * budget + (size[0] * size[1] if size else budget)) / 1e6
         return await run_jobs(req, request, "edit", mp, lambda _seed: dict(
-            prompt=prompt, num_inference_steps=DEFAULT_STEPS if TURBO else req.steps, guidance=req.guidance,
+            prompt=prompt, num_inference_steps=req.num_steps, guidance=req.guidance,
             negative_prompt=req.negative_prompt, image_paths=refs, output_resolution=req.output_resolution,
             **({"width": size[0], "height": size[1]} if size else {}),
         ))

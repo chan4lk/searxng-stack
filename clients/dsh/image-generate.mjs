@@ -6,6 +6,9 @@
 //   edit_image      instruction edits over 1-10 workspace images: change one,
 //                   restyle it, or combine/merge several into one picture
 //
+// Both take `model`: "turbo" (8 fixed steps, fast drafts) or "base" (40-step,
+// better detail, ~5x slower). Omitted, the server's default (IMAGE_MODEL) runs.
+//
 // Results are saved as PNGs in the session's workspace (generated-images/
 // unless a filename is given). Input and output paths must stay inside it.
 // Endpoint: $IMAGE_SERVER_URL, else the loader entry's `config.url`, else localhost.
@@ -34,8 +37,10 @@ const MAX_INPUT_BYTES = 25 * 1024 * 1024
 const TIMEOUT_MS = 15 * 60 * 1000
 
 const PNG_OR_BARE = (v) => /\.png$/i.test(v) || !/\.[a-z0-9]{2,4}$/i.test(v)
+const MODELS = ['turbo', 'base']
 const COMMON_SPEC = {
   prompt: { type: 'string' },
+  model: { type: 'string', enum: MODELS },
   steps: { type: 'integer', min: 10, max: 60 },
   seed: { type: 'integer' },
   transparent: { type: 'boolean' },
@@ -118,6 +123,7 @@ const OUTPUT_SCHEMA = {
     url: { type: 'string', required: true },
     size: { type: 'string', required: true },
     seed: { type: 'integer', required: true },
+    model: { type: 'string', required: true },
     steps: { type: 'integer', required: true },
     seconds: { type: 'number', required: true },
     model_load_seconds: { type: 'number', required: true },
@@ -134,7 +140,7 @@ function renderResult(verb) {
   return (_args, v) => [{
     type: 'text',
     text: `${verb} a ${v.size}${v.transparent ? ' transparent (RGBA)' : ''} image and saved it to ${v.path} ` +
-      `(seed ${v.seed}, ${v.steps} steps, ${v.seconds}s` +
+      `(${v.model}, seed ${v.seed}, ${v.steps} steps, ${v.seconds}s` +
       (v.model_load_seconds > 1 ? `, incl. ${v.model_load_seconds}s model load` : '') +
       `). Server copy: ${v.url}` +
       (v.transparent
@@ -191,7 +197,8 @@ export function apply(ctx, config = {}) {
       url: item.url,
       size: `${item.width}x${item.height}`,
       seed: item.seed,
-      steps,
+      model: result.model ?? 'unknown',
+      steps: result.steps ?? steps,
       seconds: result.generate_seconds ?? 0,
       model_load_seconds: result.load_seconds ?? 0,
       transparent,
@@ -206,6 +213,7 @@ export function apply(ctx, config = {}) {
   }
 
   const common = {
+    model: { type: 'string', enum: MODELS, description: 'turbo: 8 fixed steps, fast (~17 s at 1024x1024), fine for drafts. base: 40 steps, noticeably better detail and text but ~5x slower; use it for final images or when the user asks for higher quality. Default: the server\'s default (base). Switching model reloads it (~5-20 s).' },
     seed: { type: 'integer', description: 'Seed for reproducible output. Omit for a random seed.' },
     transparent: { type: 'boolean', description: 'Produce a transparent-background PNG (stickers, icons, cut-outs). Default false.' },
     negative_prompt: { type: 'string', description: 'Things to avoid. Only takes effect together with guidance > 1.' },
@@ -216,6 +224,7 @@ export function apply(ctx, config = {}) {
     ...(args.seed !== undefined && { seed: args.seed }),
     ...(args.negative_prompt && { negative_prompt: args.negative_prompt }),
     ...(args.guidance !== undefined && { guidance: args.guidance }),
+    ...(args.model && { model: args.model }),
   })
 
   registerLenient(ctx, defineTool, {
@@ -230,7 +239,7 @@ export function apply(ctx, config = {}) {
     parameters: {
       prompt: { type: 'string', required: true, description: 'Detailed description of the image to generate.' },
       size: { type: 'string', enum: SIZES, description: 'Width x height in pixels. Default 1024x1024.' },
-      steps: { type: 'integer', description: 'Denoising steps, 10-60. Default 40; ~20 for quick drafts.' },
+      steps: { type: 'integer', description: 'Denoising steps for the base model, 10-60. Default 40. Turbo ignores it.' },
       init_image: { type: 'string', description: 'Optional workspace image to start from, for a variation that keeps its layout.' },
       strength: { type: 'number', description: 'With init_image: how much to change it, 0.05 (barely) to 0.95 (almost fully redrawn). Default 0.6.' },
       ...common,
@@ -268,7 +277,7 @@ export function apply(ctx, config = {}) {
       prompt: { type: 'string', required: true, description: 'The edit instruction, naming images as "image 1", "image 2", ...; say what to keep as well as what to change.' },
       size: { type: 'string', enum: SIZES, description: 'Output size. Default: follow the last image\'s aspect ratio.' },
       detail: { type: 'string', enum: Object.keys(DETAIL), description: 'Resolution budget for inputs and automatic output size: low 512, medium 768, high 1024 (default). Lower is faster.' },
-      steps: { type: 'integer', description: 'Denoising steps, 10-60. Default 30.' },
+      steps: { type: 'integer', description: 'Denoising steps for the base model, 10-60. Default 30. Turbo ignores it.' },
       ...common,
     },
     output: { schema: OUTPUT_SCHEMA, render: renderResult('Edited'), presentationMeta: (_args, v) => ({ path: v.path }) },

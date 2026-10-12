@@ -252,6 +252,12 @@ but was removed (the user found it ugly); use `opencode-splash` or `pi-splash`
 for a terminal UI.
 
 - **Plugin versions:** pin ones built for dsh 0.1.5.
+- **Sidebar image previews (patched 2026-10-13):** dsh-better-sidebar 0.19.1's `/sidebar/file` route
+  rejects relative paths (`is not an absolute path`), and the deliverable cards ("Open" / "Preview in
+  sidebar") pass workspace-relative ones, so images showed as broken. `resolveSessionPath` in the
+  plugin's `lib/index.js` (under `~/.dsh/profiles/web/node_modules/.pnpm/dsh-better-sidebar@0.19.1_*/`)
+  now resolves them against the session cwd; the original is `index.js.orig-20261013`. A reinstall of
+  the plugin drops the patch. 0.22–0.25 still have the bug and need dsh ≥ 0.1.7.
 - **Installing:** `dsh plugin add` can fail with
   `No matching version found for @deepseek-ai/dsh-settings@>=0.1.5 <0.2.0-0`.
 - **The web profile reloads live:** writing a bundle into `package.json` before

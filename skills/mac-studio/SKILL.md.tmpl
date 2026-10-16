@@ -282,6 +282,11 @@ for a terminal UI.
   plugin's `lib/index.js` (under `~/.dsh/profiles/web/node_modules/.pnpm/dsh-better-sidebar@0.19.1_*/`)
   now resolves them against the session cwd; the original is `index.js.orig-20261013`. A reinstall of
   the plugin drops the patch. 0.22–0.25 still have the bug and need dsh ≥ 0.1.7.
+- **Files tab keeps its tree (patched 2026-10-16):** in the default "Merged" explorer mode a click in the
+  Files tab switched that tab to the file, and the docked tree (open by default only while the tab has no
+  path) closed, so the image replaced the tree. `openFile` in `lib/client-registry.js` (the bundle the
+  browser loads) and `lib/client.js` now carries `meta.treeOpen` over, so files open beside the tree.
+  Originals: `*.orig-20261016`. Lost on reinstall, like the patch above.
 - **Installing:** `dsh plugin add` can fail with
   `No matching version found for @deepseek-ai/dsh-settings@>=0.1.5 <0.2.0-0`.
 - **The web profile reloads live:** writing a bundle into `package.json` before

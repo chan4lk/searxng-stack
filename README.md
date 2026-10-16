@@ -282,8 +282,10 @@ newer than 0.20.0. `pyproject.toml` pins the commit that added them
 images plus an instruction, `detail` low/medium/high). Both take `lora` and
 `lora_scale`. Just ask the agent,
 for example "put the logo from brand.png on the mug in mug.jpg and save it as
-assets/mug.png". Results are saved inside the session's workspace (by
-default in `generated-images/`), and paths outside it are refused. When the
+assets/mug.png". Results are saved inside the session's workspace, by default
+as `generated-images/<YYYY-MM-DD>/<theme>/<title>.png` from the tools' `theme`
+(default `misc`) and `title` (default: the prompt's slug) parameters; an existing
+name gets `-2`, `-3`, …. Paths outside the workspace are refused. When the
 session's model accepts images (`input: [text, image]` in its settings entry;
 the template sets this for `Qwen3.6-35B-A3B-Splash`), the result asks the agent
 to open the file with `read_image`. That card is the only one the dsh UI draws

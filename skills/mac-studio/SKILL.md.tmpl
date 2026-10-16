@@ -396,8 +396,9 @@ name clothing.
 - `edit_image`: `images` (1–10 workspace paths), `prompt`, `detail`
   (low/medium/high), and optional `size`.
 
-Both save PNGs into the session's workspace (default `generated-images/`, or a
-`filename` relative to the workspace), and refuse any input or output path
+Both save PNGs into the session's workspace (default
+`generated-images/<YYYY-MM-DD>/<theme>/<title>.png` from their `theme`/`title` params, since
+2026-10-16; or a `filename` relative to the workspace), and refuse any input or output path
 outside it. They find the server through `config.url` on their entry in
 `~/.dsh/splash.patch.yml`, which `$IMAGE_SERVER_URL` overrides; `searxng-search`
 works the same way. If a tool reports `unreachable at http://127.0.0.1:…`,

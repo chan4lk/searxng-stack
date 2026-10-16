@@ -49,7 +49,7 @@ from typing import Callable, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 log = logging.getLogger("image-server")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -498,8 +498,16 @@ class CommonRequest(BaseModel):
     negative_prompt: str | None = None
     transparent: bool = Field(False, description="Ask for an RGBA result with a transparent background")
     quantize: Literal[0, 4, 8] | None = Field(None, description="0 = bf16; default from IMAGE_QUANTIZE")
+    output_format: Literal["png", "jpeg"] = Field("png", description="png (lossless, keeps alpha) or jpeg (smaller; not with transparent)")
+    jpeg_quality: int = Field(92, ge=50, le=100)
     lora: str | None = Field(None, description="Name of a LoRA from GET /v1/loras; prompt with its trigger. A different LoRA than the loaded one reloads the model")
     lora_scale: float | None = Field(None, ge=0.0, le=2.0, description="LoRA strength; default from its sidecar, else 1.0")
+
+    @model_validator(mode="after")
+    def check_format(self):
+        if self.output_format == "jpeg" and self.transparent:
+            raise ValueError("transparent output needs output_format png (JPEG has no alpha)")
+        return self
 
     @field_validator("lora")
     @classmethod
@@ -597,15 +605,19 @@ async def run_jobs(req: CommonRequest, request: Request, variant: Variant, megap
             quantize = used_q
             timings["peak_memory_gb"] = max(timings.get("peak_memory_gb", 0.0), peak)
 
-            name = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}.png"
-            image.save(OUTPUT_DIR / name)
+            jpeg = req.output_format == "jpeg"
+            if jpeg:
+                image = image.convert("RGB")
+            save_kwargs = {"format": "JPEG", "quality": req.jpeg_quality} if jpeg else {"format": "PNG"}
+            name = f"{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}.{'jpg' if jpeg else 'png'}"
+            image.save(OUTPUT_DIR / name, **save_kwargs)
             if req.response_format == "url":
                 item = {"url": str(request.base_url).rstrip("/") + f"/images/{name}"}
             else:
                 buf = io.BytesIO()
-                image.save(buf, format="PNG")
+                image.save(buf, **save_kwargs)
                 item = {"b64_json": base64.b64encode(buf.getvalue()).decode()}
-            data.append({**item, "seed": base_seed + i, "width": image.width, "height": image.height, "mode": image.mode,
+            data.append({**item, "format": "jpeg" if jpeg else "png", "seed": base_seed + i, "width": image.width, "height": image.height, "mode": image.mode,
                          "transparent_fraction": transparent_fraction(image)})
         return {
             "created": int(time.time()),
@@ -633,7 +645,7 @@ async def idle_watcher() -> None:
 
 def prune_outputs() -> None:
     cutoff = time.time() - OUTPUT_RETENTION_DAYS * 86400
-    for f in OUTPUT_DIR.glob("*.png"):
+    for f in [*OUTPUT_DIR.glob("*.png"), *OUTPUT_DIR.glob("*.jpg")]:
         if f.stat().st_mtime < cutoff:
             f.unlink(missing_ok=True)
 
@@ -760,4 +772,4 @@ async def image_file(name: str):
     path = (OUTPUT_DIR / name).resolve()
     if path.parent != OUTPUT_DIR.resolve() or not path.is_file():
         raise HTTPException(404, "not found")
-    return FileResponse(path, media_type="image/png")
+    return FileResponse(path, media_type="image/jpeg" if path.suffix == ".jpg" else "image/png")

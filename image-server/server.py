@@ -10,6 +10,13 @@ request for the other one reloads (~5-20 s).
                                 strength-based image-to-image
 - POST /v1/images/edits         instruction edits over 1-10 reference images:
                                 change, restyle, or combine/merge them
+- GET  /v1/loras                LoRAs a request can name with `lora`
+
+LoRAs are .safetensors files in IMAGE_LORA_DIR (default ~/image-server-loras),
+named by their stem, each with an optional <name>.json sidecar ({"trigger": ...,
+"description": ..., "scale": ...}). A request names one with `lora` (and
+`lora_scale`); it is baked into the loaded weights, so a different LoRA, scale
+or none reloads the model.
 
 The model is not loaded at startup: the first request loads it, and it is
 unloaded again after IMAGE_IDLE_UNLOAD seconds without work. Only one variant
@@ -31,6 +38,7 @@ import io
 import logging
 import os
 import random
+import re
 import tempfile
 import time
 import uuid
@@ -64,6 +72,8 @@ IDLE_UNLOAD = int(os.environ.get("IMAGE_IDLE_UNLOAD", "600"))
 MAX_QUEUE = int(os.environ.get("IMAGE_MAX_QUEUE", "4"))
 OUTPUT_DIR = Path(os.environ.get("IMAGE_OUTPUT_DIR", Path.home() / "image-server-outputs"))
 OUTPUT_RETENTION_DAYS = int(os.environ.get("IMAGE_OUTPUT_RETENTION_DAYS", "7"))
+LORA_DIR = Path(os.environ.get("IMAGE_LORA_DIR", Path.home() / "image-server-loras"))
+LORA_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 MAX_SIDE = 2048
 GB = 1024**3
 # Memory guardrails. MLX's set_memory_limit is only a guideline (it raises only
@@ -186,6 +196,56 @@ def model_path(name: ModelName) -> str | None:
     return snapshot_download(TURBO_REPO, local_files_only=True, ignore_patterns=["assets/*"])
 
 
+LoraSpec = tuple[str, float]  # (name in LORA_DIR, scale)
+
+
+def lora_info(name: str) -> dict:
+    """The sidecar <name>.json next to a LoRA, or {} (missing or unreadable)."""
+    import json
+
+    try:
+        info = json.loads((LORA_DIR / f"{name}.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return info if isinstance(info, dict) else {}
+
+
+def list_loras() -> list[dict]:
+    if not LORA_DIR.is_dir():
+        return []
+    out = []
+    for f in sorted(LORA_DIR.glob("*.safetensors")):
+        if LORA_NAME.match(f.stem):
+            info = lora_info(f.stem)
+            out.append({"name": f.stem, "size_mb": round(f.stat().st_size / 1024**2, 1),
+                        **{k: info[k] for k in ("trigger", "description", "scale") if k in info}})
+    return out
+
+
+def lora_path(name: str) -> Path:
+    """Only plain names of files in LORA_DIR, never caller-supplied paths."""
+    path = LORA_DIR / f"{name}.safetensors"
+    if not LORA_NAME.match(name) or not path.is_file():
+        available = "; ".join(l["name"] + (f" (trigger: {l['trigger']!r})" if "trigger" in l else "") for l in list_loras()) \
+            or f"none (add .safetensors files to {LORA_DIR})"
+        raise HTTPException(422, f"unknown lora {name!r}; available: {available}")
+    return path
+
+
+def apply_lora(model, lora: LoraSpec) -> None:
+    """Bake one LoRA into the loaded transformer. Both variants share the transformer's layer names."""
+    from mflux.models.common.lora.mapping.lora_loader import LoRALoader
+    from mflux.models.qwen21.weights.qwen21_lora_mapping import Qwen21LoRAMapping
+
+    name, scale = lora
+    started = time.monotonic()
+    model.lora_paths, model.lora_scales = LoRALoader.load_and_apply_lora(
+        lora_mapping=Qwen21LoRAMapping.get_mapping(), transformer=model.transformer,
+        lora_paths=[str(lora_path(name))], lora_scales=[scale], bake_lora=True,
+    )
+    log.info("applied lora %s (scale %.2f) in %.1fs", name, scale, time.monotonic() - started)
+
+
 PEAKS_FILE = Path(os.environ.get("IMAGE_PEAKS_FILE", Path.home() / ".image-server-peaks.json"))
 
 
@@ -267,36 +327,39 @@ class ModelManager:
         self.name: ModelName | None = None
         self.variant: Variant | None = None
         self.quantize: int | None = None
+        self.lora: LoraSpec | None = None
         self.last_used: float | None = None
 
-    def load(self, name: ModelName, variant: Variant, quantize: int | None, bucket: int = 2) -> tuple[float, int | None]:
-        """Load `variant`, stepping down the quantization if memory is short.
+    def load(self, name: ModelName, variant: Variant, quantize: int | None, bucket: int = 2,
+             lora: LoraSpec | None = None) -> tuple[float, int | None]:
+        """Load `variant` (with `lora` baked in), stepping down the quantization if memory is short.
 
         Returns (seconds spent loading, quantization actually loaded).
         """
         # Reuse the resident model if it's at the requested level or one the guard
         # would step down to anyway; reloading just to fail the same check churns.
-        if self.model is not None and self.name == name and self.variant == variant and self.quantize in fallback_chain(quantize):
+        if (self.model is not None and self.name == name and self.variant == variant and self.lora == lora
+                and self.quantize in fallback_chain(quantize)):
             return 0.0, self.quantize
         self.unload()
         if not MEMORY_GUARD:
-            return self._load(name, variant, quantize), quantize
+            return self._load(name, variant, quantize, lora), quantize
         free = available_gb()
         for q in fallback_chain(quantize):
             need = expected_peak_gb(variant, q, bucket) + HEADROOM_GB
             if free >= need:
                 if q != quantize:
                     log.warning("memory guard: %.1f GB available, stepping %s -> %s", free, quantize, q)
-                return self._load(name, variant, q), q
+                return self._load(name, variant, q, lora), q
         need = expected_peak_gb(variant, fallback_chain(quantize)[-1], bucket) + HEADROOM_GB
         raise MemoryGuardError(
             f"not enough free memory to load the {variant} model: ~{need:.0f} GB needed "
             f"(peak estimate + {HEADROOM_GB:.0f} GB headroom), {free:.1f} GB available. {NO_SELF_REMEDY}"
         )
 
-    def _load(self, name: ModelName, variant: Variant, quantize: int | None) -> float:
+    def _load(self, name: ModelName, variant: Variant, quantize: int | None, lora: LoraSpec | None = None) -> float:
         started = time.monotonic()
-        log.info("loading %s variant=%s quantize=%s", MODEL_IDS[name], variant, quantize)
+        log.info("loading %s variant=%s quantize=%s lora=%s", MODEL_IDS[name], variant, quantize, lora)
         if variant == "edit":
             from mflux.models.qwen21.reference import QwenImage21Edit
 
@@ -306,7 +369,14 @@ class ModelManager:
             from mflux.models.qwen21.variants.txt2img.qwen_image_21 import QwenImage21
 
             self.model = QwenImage21(quantize=quantize, model_path=model_path(name), model_config=ModelConfig.qwen_image_21())
-        self.name, self.variant, self.quantize, self.last_used = name, variant, quantize, time.time()
+        if lora is not None:
+            try:
+                apply_lora(self.model, lora)
+            except BaseException:
+                self.model = None  # don't leave a half-patched model resident
+                gc.collect()
+                raise
+        self.name, self.variant, self.quantize, self.lora, self.last_used = name, variant, quantize, lora, time.time()
         took = time.monotonic() - started
         log.info("loaded in %.1fs", took)
         return took
@@ -317,17 +387,18 @@ class ModelManager:
         import mlx.core as mx
 
         log.info("unloading %s variant=%s", MODEL_IDS.get(self.name, self.name), self.variant)
-        self.model = self.name = self.variant = self.quantize = None
+        self.model = self.name = self.variant = self.quantize = self.lora = None
         gc.collect()
         mx.clear_cache()
         return True
 
-    def generate(self, *, name: ModelName, variant: Variant, quantize: int | None, megapixels: float, **kwargs):
+    def generate(self, *, name: ModelName, variant: Variant, quantize: int | None, megapixels: float,
+                 lora: LoraSpec | None = None, **kwargs):
         global turbo_schedule
         import mlx.core as mx
 
         bucket = workload_bucket(megapixels)
-        load_seconds, quantize = self.load(name, variant, quantize, bucket)
+        load_seconds, quantize = self.load(name, variant, quantize, bucket, lora)
         assert self.model is not None
         # Generation needs working memory on top of the resident weights.
         working = max(0.0, expected_peak_gb(variant, quantize, bucket) - mx.get_active_memory() / GB)
@@ -427,6 +498,24 @@ class CommonRequest(BaseModel):
     negative_prompt: str | None = None
     transparent: bool = Field(False, description="Ask for an RGBA result with a transparent background")
     quantize: Literal[0, 4, 8] | None = Field(None, description="0 = bf16; default from IMAGE_QUANTIZE")
+    lora: str | None = Field(None, description="Name of a LoRA from GET /v1/loras; prompt with its trigger. A different LoRA than the loaded one reloads the model")
+    lora_scale: float | None = Field(None, ge=0.0, le=2.0, description="LoRA strength; default from its sidecar, else 1.0")
+
+    @field_validator("lora")
+    @classmethod
+    def check_lora(cls, v: str | None) -> str | None:
+        if v is not None and not LORA_NAME.match(v):
+            raise ValueError("lora must be a plain name from GET /v1/loras")
+        return v
+
+    @property
+    def lora_spec(self) -> LoraSpec | None:
+        """(name, scale) for the requested LoRA; 422 if it isn't in LORA_DIR."""
+        if self.lora is None:
+            return None
+        lora_path(self.lora)
+        scale = self.lora_scale if self.lora_scale is not None else float(lora_info(self.lora).get("scale", 1.0))
+        return self.lora, round(scale, 3)
 
     @field_validator("model")
     @classmethod
@@ -478,6 +567,7 @@ async def run_jobs(req: CommonRequest, request: Request, variant: Variant, megap
     if state["pending"] >= MAX_QUEUE:
         raise HTTPException(429, f"queue full ({MAX_QUEUE} requests pending); retry later")
     quantize = DEFAULT_QUANTIZE if req.quantize is None else (req.quantize or None)
+    lora = req.lora_spec  # checked before queuing, so a bad name fails fast
     base_seed = req.seed if req.seed is not None else random.randrange(2**31)
 
     state["pending"] += 1
@@ -487,7 +577,8 @@ async def run_jobs(req: CommonRequest, request: Request, variant: Variant, megap
             def run(seed=base_seed + i):
                 state["busy"] = True
                 try:
-                    return manager.generate(name=req.model_name, variant=variant, quantize=quantize, megapixels=megapixels, seed=seed, **kwargs_for(seed))
+                    return manager.generate(name=req.model_name, variant=variant, quantize=quantize, megapixels=megapixels,
+                                            lora=lora, seed=seed, **kwargs_for(seed))
                 finally:
                     state["busy"] = False
 
@@ -522,6 +613,7 @@ async def run_jobs(req: CommonRequest, request: Request, variant: Variant, megap
             "steps": req.num_steps,
             "variant": variant,
             "quantize": quantize,
+            "lora": {"name": lora[0], "scale": lora[1]} if lora else None,
             "data": data,
             **{k: round(v, 1) for k, v in timings.items()},
         }
@@ -555,7 +647,7 @@ async def lifespan(_: FastAPI):
     await on_worker(manager.unload)
 
 
-app = FastAPI(title="image-server", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="image-server", version="0.5.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -566,6 +658,7 @@ async def health():
         "loaded_model": MODEL_IDS.get(manager.name) if manager.name else None,
         "variant": manager.variant,
         "quantize": manager.quantize,
+        "lora": {"name": manager.lora[0], "scale": manager.lora[1]} if manager.lora else None,
         "default_quantize": DEFAULT_QUANTIZE,
         "busy": state["busy"],
         "queued": max(0, state["pending"] - (1 if state["busy"] else 0)),
@@ -588,21 +681,35 @@ async def health():
 async def models():
     return {"object": "list", "data": [{"id": mid, "object": "model", "owned_by": "mflux", "default": name == DEFAULT_MODEL,
                                         "steps": TURBO_STEPS if name == "turbo" else BASE_STEPS,
-                                        "capabilities": ["generate", "transparent", "img2img", "edit", "multi-reference"]}
+                                        "capabilities": ["generate", "transparent", "img2img", "edit", "multi-reference", "lora"]}
                                        for name, mid in MODEL_IDS.items()]}
 
 
+@app.get("/v1/loras")
+async def loras():
+    return {"object": "list", "dir": str(LORA_DIR), "data": list_loras()}
+
+
 @app.post("/v1/load")
-async def load(variant: Variant = "edit", quantize: Literal[0, 4, 8] | None = None, model: str | None = None):
+async def load(variant: Variant = "edit", quantize: Literal[0, 4, 8] | None = None, model: str | None = None,
+               lora: str | None = None, lora_scale: float | None = None):
     q = DEFAULT_QUANTIZE if quantize is None else (quantize or None)
     name = DEFAULT_MODEL if model is None else resolve_model(model)
     if name is None:
         raise HTTPException(422, f"model must be one of {', '.join([*MODEL_IDS, *MODEL_IDS.values()])}")
+    spec = None
+    if lora is not None:
+        lora_path(lora)
+        scale = lora_scale if lora_scale is not None else float(lora_info(lora).get("scale", 1.0))
+        if not 0.0 <= scale <= 2.0:
+            raise HTTPException(422, "lora_scale must be between 0 and 2")
+        spec = (lora, round(scale, 3))
     try:
-        took, used = await on_worker(manager.load, name, variant, q, 2)
+        took, used = await on_worker(manager.load, name, variant, q, 2, spec)
     except MemoryGuardError as error:
         raise HTTPException(503, str(error)) from error
-    return {"loaded": True, "model": MODEL_IDS[name], "variant": variant, "quantize": used, "load_seconds": round(took, 1)}
+    return {"loaded": True, "model": MODEL_IDS[name], "variant": variant, "quantize": used,
+            "lora": {"name": spec[0], "scale": spec[1]} if spec else None, "load_seconds": round(took, 1)}
 
 
 @app.post("/v1/unload")

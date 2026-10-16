@@ -8,6 +8,7 @@
 //
 // Both take `model`: "turbo" (8 fixed steps, fast drafts) or "base" (40-step,
 // better detail, ~5x slower). Omitted, the server's default (IMAGE_MODEL) runs.
+// Both take `lora` (+ `lora_scale`): a LoRA name from the server's GET /v1/loras.
 //
 // Results are saved as PNGs in the session's workspace (generated-images/
 // unless a filename is given). Input and output paths must stay inside it.
@@ -47,6 +48,8 @@ const COMMON_SPEC = {
   negative_prompt: { type: 'string' },
   guidance: { type: 'number', min: 1, max: 10 },
   filename: { type: 'string', check: PNG_OR_BARE },
+  lora: { type: 'string', check: (v) => /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(v) },
+  lora_scale: { type: 'number', min: 0, max: 2 },
 }
 const GENERATE_SPEC = {
   ...COMMON_SPEC,
@@ -124,6 +127,7 @@ const OUTPUT_SCHEMA = {
     size: { type: 'string', required: true },
     seed: { type: 'integer', required: true },
     model: { type: 'string', required: true },
+    lora: { type: 'string', required: true },
     steps: { type: 'integer', required: true },
     seconds: { type: 'number', required: true },
     model_load_seconds: { type: 'number', required: true },
@@ -140,7 +144,7 @@ function renderResult(verb) {
   return (_args, v) => [{
     type: 'text',
     text: `${verb} a ${v.size}${v.transparent ? ' transparent (RGBA)' : ''} image and saved it to ${v.path} ` +
-      `(${v.model}, seed ${v.seed}, ${v.steps} steps, ${v.seconds}s` +
+      `(${v.model}${v.lora ? ` + LoRA ${v.lora}` : ''}, seed ${v.seed}, ${v.steps} steps, ${v.seconds}s` +
       (v.model_load_seconds > 1 ? `, incl. ${v.model_load_seconds}s model load` : '') +
       `). Server copy: ${v.url}` +
       (v.transparent
@@ -198,6 +202,7 @@ export function apply(ctx, config = {}) {
       size: `${item.width}x${item.height}`,
       seed: item.seed,
       model: result.model ?? 'unknown',
+      lora: result.lora ? `${result.lora.name} (scale ${result.lora.scale})` : '',
       steps: result.steps ?? steps,
       seconds: result.generate_seconds ?? 0,
       model_load_seconds: result.load_seconds ?? 0,
@@ -219,12 +224,16 @@ export function apply(ctx, config = {}) {
     negative_prompt: { type: 'string', description: 'Things to avoid. Only takes effect together with guidance > 1.' },
     guidance: { type: 'number', description: 'Classifier-free guidance, 1-10. Default 1 (the model is tuned for no guidance).' },
     filename: { type: 'string', description: 'Output path relative to the workspace, e.g. assets/hero.png. Default generated-images/<time>-<prompt>.png.' },
+    lora: { type: 'string', description: 'Name of a LoRA trained on a character or style (e.g. a recurring person), applied to the model. Put the LoRA\'s trigger phrase in the prompt and describe the clothing, or the training outfits leak in. An unknown name fails with the list of available LoRAs and their triggers. Switching LoRA reloads the model (~5-20 s).' },
+    lora_scale: { type: 'number', description: 'LoRA strength, 0-2. Default from the LoRA (usually 1). Lower (0.6-0.8) loosens the likeness and follows the prompt more.' },
   }
   const extras = (args) => ({
     ...(args.seed !== undefined && { seed: args.seed }),
     ...(args.negative_prompt && { negative_prompt: args.negative_prompt }),
     ...(args.guidance !== undefined && { guidance: args.guidance }),
     ...(args.model && { model: args.model }),
+    ...(args.lora && { lora: args.lora }),
+    ...(args.lora_scale !== undefined && { lora_scale: args.lora_scale }),
   })
 
   registerLenient(ctx, defineTool, {

@@ -369,6 +369,27 @@ and swap pressure. To re-enable the guard: `IMAGE_MEMORY_GUARD=1
 `image-server.sh unload`. The service
 writes PNGs to `~/image-server-outputs` and deletes them after 7 days.
 
+**LoRAs (since 2026-10-16):** `.safetensors` files in `~/image-server-loras/` (`IMAGE_LORA_DIR`), named by
+stem, with an optional `<name>.json` (`trigger`, `description`, `scale`). `GET /v1/loras` lists them; requests take
+`"lora": "<name>"` and `lora_scale` (0–2) on generations, variations and edits. Plain names only (never paths);
+an unknown one gets 422 with the list. `server.py` bakes it into the loaded weights with mflux's `LoRALoader` and
+`Qwen21LoRAMapping` (the edit variant has no LoRA argument of its own, but its transformer uses the same layer
+names: 256/256 keys matched), so a different LoRA/scale/none reloads (~3–6 s) and the same one is reused. Memory
+and speed unchanged (26.3 GB peak at 768x1024). The dsh tools pass `lora` and `lora_scale` too. Installed:
+`kawya` (trigger "a photo of kawya woman").
+
+**Training LoRAs:** `~/lora-train` holds a uv venv (torch 2.14, diffusers 0.41.0) and diffusers'
+`train_dreambooth_lora_qwenimage21.py` with its "no bf16 on MPS" checks disabled (bf16 works on MPS with
+torch 2.14; fp16 risks NaNs on Qwen-Image; `.orig` is the original). mflux's own `mflux-train` can't train
+Qwen-Image (only Z-Image, FLUX.2, Krea 2 and ERNIE-Image). Driven from the MacBook by
+`~/repos/virtual-influencer/assets/kawya-lora/train-kawya-lora.sh`: it copies the images, stops Ornith, LFM and
+the image-server (recorded in `~/lora-train/<name>/stopped-services`), trains, fetches the LoRA and starts them
+again. Measured 2026-10-16 (13 images, 672x512 bucket, rank 32, 1500 steps): 1.96 s/step, 49 min, ~30 GB peak,
+64 MB LoRA; checkpoints every 250 steps in `~/lora-train/kawya/output/checkpoint-*/`. The tokenizer load needs
+the network (a config file the HF cache lacks), so the run script sets `HF_HUB_DISABLE_XET=1`, not
+`HF_HUB_OFFLINE=1`. With one caption for every image, the training outfits leak into prompts that don't
+name clothing.
+
 **From dsh:** the plugin `~/.dsh/plugins/image-generate.mjs` adds two tools:
 - `generate_image`: `prompt`, `size`, `steps`, `transparent`, and
   `init_image` + `strength` for variations.

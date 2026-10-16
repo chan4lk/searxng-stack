@@ -197,6 +197,7 @@ cd ~/searxng-stack/image-server
 | **Combine / merge up to 10 images** | `POST /v1/images/edits` | `images: [a, b, …]`, `prompt: "Place the subject from image 1 in the setting of image 2"` |
 | Restyle (keep composition) | `POST /v1/images/edits` | `prompt: "Repaint image 1 as a watercolor painting, keep the composition"` |
 | Close variation of an image | `POST /v1/images/generations` | `image` + `strength` (0.05 = barely changed, 0.95 = almost fully redrawn) |
+| A trained character or style (LoRA) | both | `"lora": "<name>"`, optional `lora_scale` (0–2); see [LoRAs](#loras) |
 
 Images are sent as base64 strings or `data:` URLs. In edit prompts, refer to
 them as "image 1", "image 2", … in the order given. Without `size`, an edit's
@@ -208,8 +209,29 @@ Common fields: `n` (1–4, consecutive seeds), `steps` (default 40), `seed`,
 negative prompt), `quantize` (`8` default, `4`, or `0` = bf16), and
 `response_format` (`b64_json`, or `url` served from `/images/<name>` and kept 7 days).
 
-Other endpoints: `GET /health`, `GET /v1/models`, `POST /v1/load?variant=edit|img2img`, `POST /v1/unload`.
+Other endpoints: `GET /health`, `GET /v1/models`, `GET /v1/loras`, `POST /v1/load?variant=edit|img2img[&lora=<name>]`, `POST /v1/unload`.
 Requests run one at a time; more than 4 waiting returns `429`.
+
+### LoRAs
+
+Put Qwen-Image 2.1 LoRAs in `~/image-server-loras/` (or `IMAGE_LORA_DIR`) as
+`<name>.safetensors`. Diffusers/PEFT LoRAs work as they come out of
+`train_dreambooth_lora_qwenimage21.py` (`transformer.transformer_blocks.N.….lora_A/B` keys).
+An optional `<name>.json` next to it holds `trigger` (the phrase to put in the
+prompt), `description` and a default `scale`:
+
+```json
+{"trigger": "a photo of kawya woman", "description": "Kawya, the virtual influencer", "scale": 1.0}
+```
+
+`GET /v1/loras` lists them. A request names one with `"lora": "kawya"`; it
+works for generations, `image` + `strength` variations and edits. Only plain
+names from that folder are accepted, never paths; an unknown name gets `422` with
+the list and their triggers. The LoRA is baked into the loaded weights, so a
+request with a different LoRA, scale or none reloads the model (~3–6 s from the
+disk cache); the same one reuses it. Memory use and speed are unchanged. The
+response and `/health` report the `lora` in use. Name the clothing in the prompt:
+a LoRA trained on one kind of outfit pulls it into images that don't say otherwise.
 
 ### Memory guardrails (off by default)
 
@@ -257,7 +279,8 @@ newer than 0.20.0. `pyproject.toml` pins the commit that added them
 
 **In dsh:** the installer adds two tools, `generate_image` (text-to-image,
 `transparent`, `init_image` + `strength`) and `edit_image` (1–10 workspace
-images plus an instruction, `detail` low/medium/high). Just ask the agent,
+images plus an instruction, `detail` low/medium/high). Both take `lora` and
+`lora_scale`. Just ask the agent,
 for example "put the logo from brand.png on the mug in mug.jpg and save it as
 assets/mug.png". Results are saved inside the session's workspace (by
 default in `generated-images/`), and paths outside it are refused. When the

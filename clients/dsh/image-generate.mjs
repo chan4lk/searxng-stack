@@ -98,7 +98,10 @@ function insideWorkspace(workspace, path, what) {
 
 function outputPath(workspace, filename, prompt) {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '-')
-  const rel = filename || join('generated-images', `${stamp}-${slug(prompt)}.png`)
+  // Repaired malformed calls can leave stray spaces or a trailing slash ("kawya.png /"),
+  // which would otherwise create a directory named "kawya.png ".
+  const cleaned = filename?.trim().replace(/\s*\/\s*/g, '/').replace(/\/+$/, '')
+  const rel = cleaned || join('generated-images', `${stamp}-${slug(prompt)}.png`)
   if (isAbsolute(rel)) throw new Error('filename must be relative to the workspace')
   return insideWorkspace(workspace, rel.endsWith('.png') ? rel : `${rel}.png`, 'filename')
 }

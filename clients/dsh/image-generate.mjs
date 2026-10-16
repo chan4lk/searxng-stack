@@ -11,9 +11,8 @@
 // Both take `lora` (+ `lora_scale`): a LoRA name from the server's GET /v1/loras.
 //
 // Results are saved in the session's workspace as
-//   generated-images/<YYYY-MM-DD>/<theme>/<title>.jpg
-// (theme defaults to "misc", title to the prompt's slug; PNG when transparent),
-// unless a filename is given (.jpg/.jpeg or .png; no extension = .jpg).
+//   generated-images/<YYYY-MM-DD>/<theme>/<title>.png
+// (theme defaults to "misc", title to the prompt's slug), unless a filename is given.
 // Input and output paths must stay inside the workspace.
 // Endpoint: $IMAGE_SERVER_URL, else the loader entry's `config.url`, else localhost.
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
@@ -40,7 +39,7 @@ const MAX_INPUT_BYTES = 25 * 1024 * 1024
 // First use loads the model (can take minutes); a 1024² image is then ~1-2 minutes.
 const TIMEOUT_MS = 15 * 60 * 1000
 
-const IMAGE_OR_BARE = (v) => /\.(png|jpe?g)$/i.test(v.trim().replace(/\s*\/+\s*$/, '')) || !/\.[a-z0-9]{2,4}$/i.test(v.trim())
+const PNG_OR_BARE = (v) => /\.png$/i.test(v.trim().replace(/\s*\/+\s*$/, '')) || !/\.[a-z0-9]{2,4}$/i.test(v.trim())
 const SLUG_PART = (v) => /[a-z0-9]/i.test(v)
 const MODELS = ['turbo', 'base']
 const COMMON_SPEC = {
@@ -51,7 +50,7 @@ const COMMON_SPEC = {
   transparent: { type: 'boolean' },
   negative_prompt: { type: 'string' },
   guidance: { type: 'number', min: 1, max: 10 },
-  filename: { type: 'string', check: IMAGE_OR_BARE },
+  filename: { type: 'string', check: PNG_OR_BARE },
   theme: { type: 'string', check: SLUG_PART },
   title: { type: 'string', check: SLUG_PART },
   lora: { type: 'string', check: (v) => /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(v) },
@@ -107,24 +106,22 @@ function insideWorkspace(workspace, path, what) {
   return target
 }
 
-// Where a result goes: `filename` if given, else generated-images/<date>/<theme>/<title>.<ext>.
+// Where a result goes: `filename` if given, else generated-images/<date>/<theme>/<title>.png.
 // An existing file is never overwritten in the default layout: -2, -3, ... is appended.
-async function outputPath(workspace, { filename, theme, title, prompt, transparent }) {
-  const ext = transparent ? '.png' : '.jpg'
+async function outputPath(workspace, { filename, theme, title, prompt }) {
   let rel
   if (filename) {
     // Repaired malformed calls can leave stray spaces or a trailing slash ("kawya.png /"),
     // which would otherwise create a directory named "kawya.png ".
     rel = filename.trim().replace(/\s*\/\s*/g, '/').replace(/\/+$/, '')
     if (isAbsolute(rel)) throw new Error('filename must be relative to the workspace')
-    if (!/\.(png|jpe?g)$/i.test(rel)) rel += ext
-    if (transparent && !/\.png$/i.test(rel)) throw new Error('transparent images must be saved as .png')
+    if (!/\.png$/i.test(rel)) rel += '.png'
     return insideWorkspace(workspace, rel, 'filename')
   }
   const dir = join('generated-images', localDate(), slug(theme || 'misc', 40))
   const base = slug(title || prompt, 60)
   for (let n = 1; ; n++) {
-    rel = join(dir, `${base}${n > 1 ? `-${n}` : ''}${ext}`)
+    rel = join(dir, `${base}${n > 1 ? `-${n}` : ''}.png`)
     const target = insideWorkspace(workspace, rel, 'output path')
     if (!(await stat(target).catch(() => null))) return target
   }
@@ -198,7 +195,7 @@ export function apply(ctx, config = {}) {
         method: 'POST',
         signal: exec.signal,
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ ...body, steps, transparent, response_format: 'url', output_format: /\.jpe?g$/i.test(target) ? 'jpeg' : 'png' }),
+        body: JSON.stringify({ ...body, steps, transparent, response_format: 'url' }),
       })
     } catch (error) {
       if (exec.signal?.aborted) throw error
@@ -251,8 +248,8 @@ export function apply(ctx, config = {}) {
     negative_prompt: { type: 'string', description: 'Things to avoid. Only takes effect together with guidance > 1.' },
     guidance: { type: 'number', description: 'Classifier-free guidance, 1-10. Default 1 (the model is tuned for no guidance).' },
     theme: { type: 'string', description: 'Folder for this batch/post, kebab-case, e.g. area6-mindset-monday or cafe-lifestyle. Images go to generated-images/<today>/<theme>/. Default misc.' },
-    title: { type: 'string', description: 'Short kebab-case name for this image, e.g. squat-low-angle or slide-2-hands. Default: from the prompt. Saved as <title>.jpg (PNG when transparent); an existing name gets -2, -3, ...' },
-    filename: { type: 'string', description: 'Explicit output path relative to the workspace (.jpg or .png), overriding theme/title, e.g. assets/brand/hero.png. Prefer theme + title.' },
+    title: { type: 'string', description: 'Short kebab-case name for this image, e.g. squat-low-angle or slide-2-hands. Default: from the prompt. Saved as <title>.png; an existing name gets -2, -3, ...' },
+    filename: { type: 'string', description: 'Explicit output path relative to the workspace, overriding theme/title, e.g. assets/brand/hero.png. Prefer theme + title.' },
     lora: { type: 'string', description: 'Name of a LoRA trained on a character or style (e.g. a recurring person), applied to the model. Put the LoRA\'s trigger phrase in the prompt and describe the clothing, or the training outfits leak in. An unknown name fails with the list of available LoRAs and their triggers. Switching LoRA reloads the model (~5-20 s).' },
     lora_scale: { type: 'number', description: 'LoRA strength, 0-2. Default from the LoRA (usually 1). Lower (0.6-0.8) loosens the likeness and follows the prompt more.' },
   }
@@ -268,7 +265,7 @@ export function apply(ctx, config = {}) {
   registerLenient(ctx, defineTool, {
     name: 'generate_image',
     description:
-      'Generate an image from a text prompt with a local Qwen-Image 2.1 model and save it in the workspace (JPEG, or PNG when transparent). ' +
+      'Generate an image from a text prompt with a local Qwen-Image 2.1 model and save it as a PNG in the workspace. ' +
       'Set transparent for stickers, icons or cut-outs. To make a close variation of an existing image, pass init_image ' +
       '(and strength); to change, restyle or combine existing images by instruction, use edit_image instead. ' +
       'Returns the saved path; follow up with read_image on it to show the result in the chat. ' +
@@ -304,7 +301,7 @@ export function apply(ctx, config = {}) {
   registerLenient(ctx, defineTool, {
     name: 'edit_image',
     description:
-      'Edit or combine existing workspace images by instruction with a local Qwen-Image 2.1 model, and save the result in the workspace. ' +
+      'Edit or combine existing workspace images by instruction with a local Qwen-Image 2.1 model, and save the result as a PNG. ' +
       'Pass 1-10 images; refer to them in the prompt as "image 1", "image 2", ... in the order given. Examples: ' +
       '"Change the jacket in image 1 to dark green, keep the face and pose"; "Place the subject from image 1 in the setting of image 2"; ' +
       '"Repaint image 1 as a watercolor painting, keep the composition"; "Put the logo from image 2 on the mug in image 1". ' +

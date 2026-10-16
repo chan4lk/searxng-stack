@@ -1,6 +1,6 @@
 ---
 name: __SERVER_NAME__
-description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash or Sushi (the local Qwen LLM servers), claude-splash, opencode-splash, pi-splash or dsh-splash, the SearXNG search stack, local image generation (Qwen-Image, image-server), Mellum, Ornith, music generation (ACE-Step, music-server), text classification (GLiNER2.5-Decide, classify-server), or OpenViking agent memory, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
+description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash or Sushi (the local Qwen LLM servers), claude-splash, opencode-splash, pi-splash or dsh-splash, the SearXNG search stack, local image generation (Qwen-Image, image-server), Mellum, Ornith, LFM (Liquid AI), music generation (ACE-Step, music-server), text classification (GLiNER2.5-Decide, classify-server), or OpenViking agent memory, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
 ---
 
 # Managing the Mac Studio
@@ -46,7 +46,8 @@ foreground, not in the background, so the URL reaches you.
 |---|---|---|---|
 | **Splash** (Qwen3.8-27B LLM) | `http://__SERVER_IP__:8000` (OpenAI `/v1/chat/completions` and Anthropic `/v1/messages`) | Foreground `splash serve` in a login shell, **not a service** | see below |
 | **Sushi** (Qwen3.8-Flash-Next-Sushi-3bpw) | `http://__SERVER_IP__:8084` (OpenAI `/v1/chat/completions`, Anthropic `/v1/messages`; API key required, `/health` open) | Foreground `~/sushi-serve.sh` via nohup, **not a service**; log `~/sushi.log` | see below |
-| **Mellum** (Mellum2.1-12B-A2.5B-Thinking, Apache-2.0) | `http://__SERVER_IP__:8085/v1` (OpenAI `/v1/chat/completions`; no auth) | Foreground `~/mellum-serve.sh` via nohup, **not a service**; log `~/mellum.log` | see below |
+| **Mellum** (Mellum2.1-12B-A2.5B-Thinking, Apache-2.0) | `http://__SERVER_IP__:8085/v1` (OpenAI `/v1/chat/completions`; no auth) | Foreground `~/mellum-serve.sh` via nohup, **not a service**; log `~/mellum.log`; **stopped since 2026-10-15** | see below |
+| **LFM** (LFM2.5-24B-A2B, LFM Open License v1.0) | `http://__SERVER_IP__:8087/v1` (OpenAI `/v1/chat/completions`; no auth) | Foreground `~/lfm-serve.sh` via nohup, **not a service**; log `~/lfm.log` | see below |
 | **Ornith** (Ornith-1.5-35B-A3B, MIT) | `http://__SERVER_IP__:8086/v1` (OpenAI and Anthropic APIs; Sushi's API key) | Foreground `~/ornith-serve.sh` (Splash) via nohup, **not a service**; log `~/ornith.log` | see below |
 | **SearXNG** + Valkey | `http://__SERVER_NAME__.__TAILNET__:8889` (`/search?q=…&format=json`) | Docker Compose on Colima, published with `tailscale serve` | `~/searxng-stack/searxng.sh up\|down\|restart\|status\|logs\|test` |
 | **image-server** (Qwen-Image 2.1 Turbo via mflux) | `http://__SERVER_NAME__.__TAILNET__:8890` (`POST /v1/images/generations`, OpenAI-style) | LaunchAgent `com.searxng-stack.image-server`; model loads on demand | `~/searxng-stack/image-server/image-server.sh install\|status\|logs\|restart\|unload\|test` |
@@ -146,6 +147,29 @@ on the MXFP4 MLX quant `randmaru/Mellum2.1-12B-A2.5B-Thinking-mlx-mxfp4` (6.5 GB
 - **Memory:** ~3 GB RSS beside Sushi (19% free, ~1.7 GB swap used with both up).
 - Official GGUFs (`JetBrains/Mellum2.1-12B-A2.5B-Thinking-GGUF`) need a llama.cpp that knows `mellum`; the
   Studio's Ollama 0.40.2 is untested with them.
+- **Stopped 2026-10-15** at the user's request to make room for LFM. Start it again with the command above.
+
+### LFM
+
+Liquid AI's `LFM2.5-24B-A2B` (LFM Open License v1.0, not Apache/MIT: check it before business use). A reasoning
+MoE (`lfm2_moe`: 24B total, ~2B active, 64 experts top-4; 30 conv layers + 10 attention layers, so the KV cache
+is small, ~2.6 GB at 128K). Official 8-bit MLX `LiquidAI/LFM2.5-24B-A2B-MLX-8bit` (25.5 GB, in the HF cache),
+served by `mlx_lm.server` from Mellum's venv (`~/mellum/.venv`, mlx-lm 0.32.0; older releases load it but
+route the experts wrong).
+
+- **Start:** `nohup ~/lfm-serve.sh > ~/lfm.log 2>&1 &`. It binds `__SERVER_IP__:8087` with Liquid's sampling
+  (temp 0.1, top_k 50) and `HF_HUB_OFFLINE=1`; the model loads on the first request (~2 s). Not supervised,
+  gone after a reboot; **ask before stopping it.** Model id: `LiquidAI/LFM2.5-24B-A2B-MLX-8bit`.
+- **Repetition penalty:** Liquid recommends 1.05, but `mlx_lm.server` has no flag for it; clients send
+  `repetition_penalty` in the request body.
+- **API:** thinking in `message.reasoning`, tool calls in `tool_calls` (verified 2026-10-16).
+- **Measured 2026-10-16** (Ornith also up): ~91 tok/s warm (254 tokens in 2.8 s), tool call 1.5 s.
+- **dsh:** provider `lfm` in `~/.dsh/splash.settings.yaml`, text only.
+- **Memory:** ~25 GB RSS; 73% free beside Ornith.
+- **Strata** (`github.com/Niko1221/Strata`, MIT; checked 2026-10-15) serves only Qwen3.8-Flash-Next
+  (and Unsloth's 4–6-bit files on Mac), so it can't run LFM or other models. Its Mac engine is Metal, built
+  from source (not MLX). On 64 GB only Q2_0 fits (~46 GB resident + a 29 GB n-gram table on the SSD); Strata measured
+  108–120 tok/s on an M5 Max, about the same as Sushi on the same model family. Not installed.
 
 ### Ornith
 

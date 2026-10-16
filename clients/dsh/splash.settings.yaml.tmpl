@@ -105,6 +105,26 @@ llm-pi-ai:
           contextWindow: 262144
           maxTokens: 32000
 
+    # LFM2.5-24B-A2B (Liquid AI, LFM Open License v1.0; 24B MoE, ~2B active, reasoning + tool calls) on the
+    # Studio: official 8-bit MLX served by mlx_lm.server 0.32 (~/lfm-serve.sh there). No auth.
+    lfm:
+      displayName: LFM
+      api: openai-completions
+      baseURL: http://__SERVER_IP__:8087/v1
+      apiKeyEnv: SPLASH_API_KEY
+      streamIdleTimeoutMs: 300000
+      defaultContextWindow: 131072
+      defaultMaxTokens: 32768
+      compat:
+        supportsDeveloperRole: true
+        maxTokensField: max_tokens
+      models:
+        - id: LiquidAI/LFM2.5-24B-A2B-MLX-8bit
+          name: LFM2.5 24B-A2B
+          # Text only. Liquid's sampling (temp 0.1, top_k 50) is the server default.
+          contextWindow: 131072
+          maxTokens: 32768
+
 agent-default-model:
   provider: sushi
   model: Qwen3.8-Flash-Next-Sushi-3bpw

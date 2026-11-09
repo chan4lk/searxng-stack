@@ -59,6 +59,15 @@ foreground, not in the background, so the URL reaches you.
 
 The SearXNG stack is a git checkout of `github.com/chan4lk/searxng-stack`. To
 update it: `cd ~/searxng-stack && git pull && ./searxng.sh restart`. Its `.env`
+**Whole stack on/off:** `~/studio-stack.sh stop|start [service]` and `status [--tsv]` (source `studio-stack.sh`
+in the repo, copied by hand; services: ornith lfm sushi mellum splash image music classify ocr asr omniasr
+openviking searxng ollama). The Claude Code mod `studio-services` (`/studio`) draws a pane with a Start/Stop
+button per service over it. `stop` frees RAM for ComfyUI (`127.0.0.1:8188`): it kills the LLM servers on 8000/8084–8087,
+boots out the LaunchAgent services and OpenViking, runs `searxng.sh down`, stops Colima and kills Ollama
+(the app respawns its server, so both). It refuses while image/music-server is generating (`FORCE=1`
+overrides). `start` brings them back with `LLMS` (default `ornith`). It never touches ComfyUI,
+studio-radar or sinhala-ocr. Stopped 2026-11-09 for ComfyUI: 76% memory free afterwards.
+
 holds the instance secret and is git-ignored, so never commit it.
 
 ### Splash
@@ -184,6 +193,18 @@ on port 8086 serves the official Q4_K_M GGUF with its vision projector and Splas
 - **dsh:** provider `ornith` in `~/.dsh/splash.settings.yaml`, `input: [ text, image ]`.
 - **Measured 2026-10-11** (Mellum also up, Sushi off): ~175 tok/s (894 tokens in 5.1 s), tool call ~1 s,
   image question ~7 s, dsh headless read-fix-run task 11.9 s. 59% memory free with both up.
+- **Pi on the Studio** (since 2026-11-09): `~/.pi/agent/models.json` has provider `ornith`
+  (`baseUrl http://__SERVER_IP__:8086/v1`, `"apiKey": "!cat ~/.sushi/api-key"` so the key isn't copied in,
+  text + image, 256K context, 32K output), and `~/.pi/agent/settings.json` makes it the default
+  (`defaultProvider ornith`, `defaultModel Ornith-1.5-35B-A3B`). Ollama's `gemma4:e2b-mlx` is still there.
+  Backups: `*.bak-20261109`. On the Studio itself use `http://__SERVER_IP__:8086`: `127.0.0.1:8086` doesn't answer
+  (the script binds only the Tailscale IP) and `__SERVER_NAME__` doesn't resolve. If Ornith is down, Pi's default fails
+  until it is started again.
+  Extensions in `~/.pi/agent/extensions/` (sources in `clients/pi/`, copied by hand, not by `install.sh`):
+  `image-generate.ts` (see image-server) and `searxng-search.ts`, tool `searxng_search` (query, `max_results`
+  default 8, `time_range`) against `http://127.0.0.1:8889` (`$SEARXNG_URL` overrides). The installed
+  `@ollama/pi-web-search` package's `web_search`/`web_fetch` fail with `Unauthorized`: they go through
+  Ollama to ollama.com, and the Studio's Ollama isn't signed in.
 - **The GGUF is patched.** Splash 1.1.0 loads GDN `ssm_alpha`/`ssm_beta` only as Q8_0, F32 or BF16
   (`libexec/install/gguf.py`), and the official `ornith-ai/Ornith-1.5-35B-A3B-GGUF` stores them as Q4_K.
   `~/ornith/gguf_ssm_f32.py SRC DST` (run with `~/mellum/.venv/bin/python -I`, which has `gguf`) rewrites
@@ -418,6 +439,12 @@ in `splash.settings.yaml`); on the 27B and Mellum the image is saved but not sho
 
 It supervises ACE-Step 1.5's own API server (`~/ace-step`, pinned commit
 ca1e85f, models in `~/ace-step/checkpoints`). The first request starts
+**From Pi on the Studio** (since 2026-11-09): `~/.pi/agent/extensions/image-generate.ts` (source
+`clients/pi/image-generate.ts`, copied by hand, not by `install.sh`) ports both tools with the same
+parameters and save layout under Pi's cwd. It calls `http://127.0.0.1:8890` (`$IMAGE_SERVER_URL` overrides);
+on the Studio the loopback port answers, the Tailscale IP gives 404. Results tell the model to view the
+file with Pi's `read` tool. Tested with Ornith: generate and edit both work.
+
 `acestep-api` on `127.0.0.1:8001`, with the MLX LM backend and the
 `acestep-5Hz-lm-1.7B` planner. After 10 idle minutes it stops that process
 entirely, which frees all its memory. When idle the service uses ~50 MB.

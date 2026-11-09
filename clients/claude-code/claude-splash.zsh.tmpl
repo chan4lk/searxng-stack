@@ -98,28 +98,53 @@ _SPLASH_DIR=${0:A:h}
 
 claude-splash() {
   _splash_pick claude-splash "$@" || return; shift $_SPLASH_SHIFT
-  local model=$REPLY settings=${TMPDIR:-/tmp}/claude-splash-settings.$$.json
-  local profile=0 proxy_pid= base=$_SPLASH_URL
+  _claude_local claude-splash $_SPLASH_URL "$REPLY" splash-local 131072 splash "$@"
+}
+
+# Claude Code on vLLM (vllm-metal on the Studio, :8088, ~/vllm-serve.sh there): the same
+# Qwen3.6 base model, batched for many users. Same profile as claude-splash. The context
+# limit is the server's max_model_len (VLLM_CTX, 64K by default), read from /v1/models.
+_VLLM_URL=http://__SERVER_IP__:8088
+claude-vllm() {
+  local key=$(cat ~/.sushi-api-key 2>/dev/null) info
+  info=$(curl -s -m 5 -H "authorization: Bearer $key" $_VLLM_URL/v1/models 2>/dev/null |
+    python3 -c 'import json,sys; m=json.load(sys.stdin)["data"][0]; print(m["id"], m.get("max_model_len") or 65536)' 2>/dev/null)
+  if [[ -z $info ]]; then
+    print "claude-vllm: vLLM isn't answering at $_VLLM_URL (start it in /studio, or on the Studio: ~/studio-stack.sh start vllm)" >&2
+    return 1
+  fi
+  print -u2 "claude-vllm: ${info% *} (context ${info#* })"
+  _claude_local claude-vllm $_VLLM_URL "${info% *}" "$key" "${info#* }" vllm "$@"
+}
+
+# _claude_local NAME URL MODEL TOKEN CONTEXT PROXY_MODE ARGS... — run Claude Code against a
+# local Anthropic-API server with every model setting pointed at MODEL.
+_claude_local() {
+  local name=$1 url=$2 model=$3 token=$4 ctx=$5 mode=$6; shift 6
+  local settings=${TMPDIR:-/tmp}/$name-settings.$$.json
+  local profile=0 proxy_pid= base=$url
   local -a extra_env extra_args
   if [[ ( $model == *Qwen3.6* && ${SPLASH_PROFILE:-on} != off ) || ${SPLASH_PROFILE:-} == force ]]; then
     profile=1
     local port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
-    python3 $_SPLASH_DIR/splash-proxy.py $_SPLASH_URL $port &>/dev/null &!
+    python3 $_SPLASH_DIR/splash-proxy.py $url $port $mode &>/dev/null &!
     proxy_pid=$!
     local i; for i in {1..50}; do curl -s -m 1 -o /dev/null http://127.0.0.1:$port/v1/models && break; sleep 0.1; done
     base=http://127.0.0.1:$port
     extra_env=(CLAUDE_CODE_MAX_OUTPUT_TOKENS=32768 CLAUDE_CODE_AUTOCOMPACT_PCT_OVERRIDE=60 BASH_MAX_OUTPUT_LENGTH=15000)
     extra_args=(--append-system-prompt-file $_SPLASH_DIR/qwen36-discipline.md)
-    print -u2 "claude-splash: Qwen3.6 profile on (proxy :$port, edit checks, verify gate, discipline prompt)"
+    print -u2 "$name: Qwen3.6 profile on (proxy :$port, edit checks, verify gate, discipline prompt)"
   fi
-  python3 - "$model" "$settings" "$base" "$profile" "$_SPLASH_DIR" <<'EOF' || { [[ -n $proxy_pid ]] && kill $proxy_pid; return 1; }
+  python3 - "$model" "$settings" "$base" "$profile" "$_SPLASH_DIR" "$token" "$ctx" <<'EOF' || { [[ -n $proxy_pid ]] && kill $proxy_pid; return 1; }
 import json, os, sys
-model, out, base, profile, d_ = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == "1", sys.argv[5]
+model, out, base, profile, d_, token, ctx = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == "1", sys.argv[5], sys.argv[6], sys.argv[7]
 d = json.load(open(os.path.expanduser('~/.claude/splash-settings.json')))
 for k in ('ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
           'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_SUBAGENT_MODEL'):
     d['env'][k] = model
 d['env']['ANTHROPIC_BASE_URL'] = base
+d['env']['ANTHROPIC_AUTH_TOKEN'] = token
+d['env']['CLAUDE_CODE_MAX_CONTEXT_TOKENS'] = ctx
 d['model'] = model
 if profile:
     d['hooks'] = {

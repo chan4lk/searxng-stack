@@ -10,7 +10,9 @@ Claude Code can't set these per model, so for POST /v1/messages the proxy adds:
     top_k 20 (Claude Code sends temperature 1).
 Everything else, including streaming responses, passes through unchanged.
 
-usage: splash-proxy.py UPSTREAM_URL PORT   (binds 127.0.0.1 only)
+With MODE vllm (vLLM's Anthropic API) it sends chat_template_kwargs preserve_thinking instead.
+
+usage: splash-proxy.py UPSTREAM_URL PORT [splash|vllm]   (binds 127.0.0.1 only)
 """
 import http.client
 import json
@@ -20,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 UPSTREAM = urllib.parse.urlsplit(sys.argv[1])
 PORT = int(sys.argv[2])
+MODE = sys.argv[3] if len(sys.argv) > 3 else "splash"
 SAMPLING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20}
 PRESERVE = {"edits": [{"type": "clear_thinking_20251015", "keep": "all"}]}
 HOP = {"connection", "keep-alive", "transfer-encoding", "content-length", "host"}
@@ -33,7 +36,10 @@ def rewrite(path, body):
     except ValueError:
         return body
     data.update(SAMPLING)
-    data.setdefault("context_management", PRESERVE)
+    if MODE == "vllm":
+        data.setdefault("chat_template_kwargs", {}).setdefault("preserve_thinking", True)
+    else:
+        data.setdefault("context_management", PRESERVE)
     return json.dumps(data).encode()
 
 

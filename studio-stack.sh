@@ -4,19 +4,20 @@
 #
 #   ~/studio-stack.sh stop [service]    # no service: every one below
 #   ~/studio-stack.sh start [service]   # no service: all but the LLMs, then $LLMS (default "ornith")
-#   ~/studio-stack.sh status [--tsv]    # --tsv: "name<TAB>up|down" per service, then "memory<TAB><free %>"
+#   ~/studio-stack.sh status [--tsv]    # --tsv: "name<TAB>up|down" per service, then "memory<TAB><free %>", "default<TAB><Pi provider>"
+#   ~/studio-stack.sh default [ornith|vllm]   # show or set Pi's default model (~/.pi/agent/settings.json)
 #
-# Services: ornith lfm sushi mellum splash image music classify ocr asr omniasr openviking searxng ollama
+# Services: ornith lfm sushi mellum splash vllm image music classify ocr asr omniasr openviking searxng ollama
 # FORCE=1 stops image/music even while they are generating.
 # Never touched: ComfyUI (shown in status only), studio-radar, sinhala-ocr's llama-server (the user's own jobs).
 export PATH=/opt/homebrew/bin:$PATH
 UID_=$(id -u)
 IP=100.101.212.33
-LLMS_ALL="ornith lfm sushi mellum splash"
+LLMS_ALL="ornith lfm sushi mellum splash vllm"
 AGENTS_ALL="image music classify ocr asr omniasr openviking"
 SERVICES="$LLMS_ALL $AGENTS_ALL searxng ollama"
 
-port_of() { case $1 in splash) echo 8000;; sushi) echo 8084;; mellum) echo 8085;; ornith) echo 8086;; lfm) echo 8087;; comfyui) echo 8188;; esac; }
+port_of() { case $1 in splash) echo 8000;; sushi) echo 8084;; mellum) echo 8085;; ornith) echo 8086;; lfm) echo 8087;; vllm) echo 8088;; comfyui) echo 8188;; esac; }
 label_of() { case $1 in openviking) echo com.openviking.server;; *) echo com.searxng-stack.$1-server;; esac; }
 is_llm() { [[ " $LLMS_ALL " == *" $1 "* ]]; }
 is_agent() { [[ " $AGENTS_ALL " == *" $1 "* ]]; }
@@ -40,6 +41,7 @@ start_one() {
     lfm)    nohup ~/lfm-serve.sh > ~/lfm.log 2>&1 & ;;
     sushi)  nohup ~/sushi-serve.sh > ~/sushi.log 2>&1 & ;;
     mellum) nohup ~/mellum-serve.sh > ~/mellum.log 2>&1 & ;;
+    vllm)   nohup ~/vllm-serve.sh > ~/vllm.log 2>&1 & ;;
     splash) nohup splash serve --host $IP --port 8000 --model incoai/Qwen3.8-27B-Splash --max-cache-disk 40G > ~/splash.log 2>&1 & ;;
     searxng)
       brew services start colima >/dev/null
@@ -94,10 +96,28 @@ status() {
     if [ "$1" = --tsv ]; then printf '%s\t%s\n' "$s" "$st"; else echo "$s $st"; fi
   done
   free=$(memory_pressure | awk -F': ' '/free percentage/{print $2}')
-  if [ "$1" = --tsv ]; then printf 'memory\t%s\n' "$free"; else echo "memory free $free"; fi
+  if [ "$1" = --tsv ]; then printf 'memory\t%s\n' "$free"; printf 'default\t%s\n' "$(default)"; else echo "memory free $free"; echo "pi default $(default)"; fi
+}
+
+PI_SETTINGS=~/.pi/agent/settings.json
+# Pi's default provider/model: ornith (Splash on :8086) or vllm (:8088). No arg: print the provider.
+default() {
+  case $1 in
+    '') /usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("defaultProvider", "?"))' $PI_SETTINGS; return ;;
+    ornith) model=Ornith-1.5-35B-A3B ;;
+    vllm) model=Qwen3.6-35B-A3B ;;
+    *) echo "default: ornith or vllm" >&2; exit 2 ;;
+  esac
+  /usr/bin/python3 - "$PI_SETTINGS" "$1" "$model" <<'PY'
+import json, sys
+path, provider, model = sys.argv[1:]
+d = json.load(open(path)); d.update(defaultProvider=provider, defaultModel=model)
+json.dump(d, open(path, "w"), indent=2)
+PY
+  echo "pi default $1 / $model"
 }
 
 case $1 in
-  stop|start|status) "$1" "$2" ;;
-  *) echo "usage: $0 stop|start [service] | status [--tsv]" >&2; exit 2 ;;
+  stop|start|status|default) "$1" "$2" ;;
+  *) echo "usage: $0 stop|start [service] | status [--tsv] | default [ornith|vllm]" >&2; exit 2 ;;
 esac

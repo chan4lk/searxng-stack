@@ -64,7 +64,8 @@ in the repo, copied by hand; services: ornith lfm sushi mellum splash vllm image
 openviking searxng ollama). The Claude Code mod `studio-services` (`/studio`) draws a pane with a Start/Stop
 button per service over it, plus "Use Splash (Ornith)" / "Use vLLM": `~/studio-stack.sh default ornith|vllm`
 sets Pi's default in `~/.pi/agent/settings.json`, and the mod rewrites dsh's `agent-default-model` in the MacBook's
-`~/.dsh/splash.patch.yml` (`install.sh` resets it to `ornith`). Switching starts no server. `stop` frees RAM for ComfyUI
+`~/.dsh/splash.patch.yml` (`install.sh` resets it to `ornith`). Switching starts no server. `status` shows an LLM as `starting` while it loads (process up, port not yet
+listening; the pane polls until it is up, and `start` won't launch a second copy). `stop` frees RAM for ComfyUI
 (`127.0.0.1:8188`): it kills the LLM servers on 8000/8084–8088,
 boots out the LaunchAgent services and OpenViking, runs `searxng.sh down`, stops Colima and kills Ollama
 (the app respawns its server, so both). It refuses while image/music-server is generating (`FORCE=1`
@@ -235,9 +236,9 @@ in the HF cache; Ornith's base model, no clean MLX build of Ornith exists).
 
 - **Start:** `nohup ~/vllm-serve.sh > ~/vllm.log 2>&1 &` (source `vllm/vllm-serve.sh` in the repo). Binds
   `__SERVER_IP__:8088`, served name `Qwen3.6-35B-A3B`, Sushi's API key, `--gpu-memory-utilization ${VLLM_MEM:-0.5}`,
-  64K context (`VLLM_CTX`), prefix caching, reasoning parser `qwen3`, tool parser `qwen3_coder`. Ready in ~20 s.
+  128K context (`VLLM_CTX`, was 64K), prefix caching, reasoning parser `qwen3`, tool parser `qwen3_coder`. Ready in ~20 s.
   Not supervised; **ask before stopping it.** It reserves its budget up front: 28 GB footprint at 0.5
-  (KV cache 277K tokens, ~4 users at full 64K context).
+  (KV cache 277K–292K tokens: ~2 users at full 128K context, ~4 at 64K).
 - **Load test:** `~/vllm/loadtest.py --url … --model … --users 1,2,4,8` (source `vllm/loadtest.py`, stdlib only;
   key from `$OPENAI_API_KEY`). Results in `~/vllm/*.txt`. Measured 2026-11-09, 256 max tokens, thinking on:
 
@@ -251,14 +252,14 @@ in the HF cache; Ornith's base model, no clean MLX build of Ornith exists).
 
   Splash is faster up to ~4 users (DFlash2 speculation) and starts queueing past that; vLLM keeps TTFT under
   0.5 s and total throughput rising to 32 users.
-- **Clients:** provider `vllm` (model `Qwen3.6-35B-A3B`, text + image, 64K context, 16K max output) in dsh's
+- **Clients:** provider `vllm` (model `Qwen3.6-35B-A3B`, text + image, 128K context, 16K max output) in dsh's
   `splash.patch.yml` and in Pi's `~/.pi/agent/models.json` on the Studio (base URL `http://__SERVER_IP__:8088/v1`;
   `127.0.0.1` doesn't answer there). Defaults stay `ornith`: pick vLLM in the model picker, or
   `pi --provider vllm --model Qwen3.6-35B-A3B`. Tool calls, images and thinking (`message.reasoning`) verified 2026-11-09.
 - **claude-vllm** (MacBook, in `claude-splash.zsh`): Claude Code on vLLM's Anthropic `/v1/messages` (bearer auth with
   Sushi's key; `x-api-key` gets 401). Same Qwen3.6 profile as claude-splash; the proxy runs in `vllm` mode and sends
   `chat_template_kwargs.preserve_thinking` instead of `context_management`. Context limit = vLLM's `max_model_len`
-  from `/v1/models` (64K by default; Claude Code's prompt is ~23K, so restart with a bigger `VLLM_CTX` for long work).
+  from `/v1/models` (128K).
   Headless Bash tool round trip: 13 s (2026-11-09).
 - **PyPI over IPv6 crawls on the Studio** (~90 KB/s vs ~3.6 MB/s over IPv4 to files.pythonhosted.org; HF downloads
   too). For a big pip/brew Python install: `networksetup -setv6off Wi-Fi` (no sudo needed), then

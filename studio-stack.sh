@@ -4,7 +4,7 @@
 #
 #   ~/studio-stack.sh stop [service]    # no service: every one below
 #   ~/studio-stack.sh start [service]   # no service: all but the LLMs, then $LLMS (default "ornith")
-#   ~/studio-stack.sh status [--tsv]    # --tsv: "name<TAB>up|down" per service, then "memory<TAB><free %>", "default<TAB><Pi provider>"
+#   ~/studio-stack.sh status [--tsv]    # --tsv: "name<TAB>up|starting|down" per service, then "memory<TAB><free %>", "default<TAB><Pi provider>"
 #   ~/studio-stack.sh default [ornith|vllm]   # show or set Pi's default model (~/.pi/agent/settings.json)
 #
 # Services: ornith lfm sushi mellum splash vllm image music classify ocr asr omniasr openviking searxng ollama
@@ -21,6 +21,9 @@ port_of() { case $1 in splash) echo 8000;; sushi) echo 8084;; mellum) echo 8085;
 label_of() { case $1 in openviking) echo com.openviking.server;; *) echo com.searxng-stack.$1-server;; esac; }
 is_llm() { [[ " $LLMS_ALL " == *" $1 "* ]]; }
 is_agent() { [[ " $AGENTS_ALL " == *" $1 "* ]]; }
+# Process of each LLM server, to see one that is still loading (no listener yet).
+proc_of() { case $1 in splash) echo 'splash serve.*--port 8000';; ornith) echo 'splash serve.*--port 8086';; sushi) echo 'sushi serve';;
+  mellum) echo 'mlx_lm.server --model randmaru';; lfm) echo 'mlx_lm.server --model LiquidAI';; vllm) echo 'vllm serve';; esac; }
 listener() { lsof -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1; }
 # Is a generation running? (a stop would cut it off)
 busy() { curl -s -m 3 "http://127.0.0.1:$1/health" | grep -q '"busy": *true'; }
@@ -33,8 +36,11 @@ is_up() {
   else return 1; fi
 }
 
+is_starting() { is_llm "$1" && ! is_up "$1" && pgrep -f "$(proc_of "$1")" >/dev/null; }
+
 start_one() {
   is_up "$1" && { echo "$1 already up"; return; }
+  is_starting "$1" && { echo "$1 already starting"; return; }
   echo "start $1"
   case $1 in
     ornith) nohup ~/ornith-serve.sh > ~/ornith.log 2>&1 & ;;
@@ -54,6 +60,11 @@ start_one() {
 }
 
 stop_one() {
+  if is_starting "$1"; then
+    echo "stop $1 (still loading)"
+    for pid in $(pgrep -f "$(proc_of "$1")"); do pkill -TERM -P "$pid" 2>/dev/null; kill "$pid"; done
+    return
+  fi
   is_up "$1" || { echo "$1 already down"; return; }
   echo "stop $1"
   case $1 in
@@ -92,7 +103,7 @@ start() {
 
 status() {
   for s in $SERVICES comfyui; do
-    if is_up "$s"; then st=up; else st=down; fi
+    if is_up "$s"; then st=up; elif is_starting "$s"; then st=starting; else st=down; fi
     if [ "$1" = --tsv ]; then printf '%s\t%s\n' "$s" "$st"; else echo "$s $st"; fi
   done
   free=$(memory_pressure | awk -F': ' '/free percentage/{print $2}')

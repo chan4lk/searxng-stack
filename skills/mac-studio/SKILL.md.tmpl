@@ -69,8 +69,9 @@ listening; the pane polls until it is up, and `start` won't launch a second copy
 (`127.0.0.1:8188`): it kills the LLM servers on 8000/8084–8088,
 boots out the LaunchAgent services and OpenViking, runs `searxng.sh down`, stops Colima and kills Ollama
 (the app respawns its server, so both). It refuses while image/music-server is generating (`FORCE=1`
-overrides). `start` brings them back with `LLMS` (default `ornith`). It never touches ComfyUI,
-studio-radar or sinhala-ocr. Stopped 2026-11-09 for ComfyUI: 76% memory free afterwards.
+overrides). `start` brings them back with `LLMS` (default `ornith`). ComfyUI starts/stops only by name
+(`start|stop comfyui` runs `~/ComfyUI/run_comfyui.sh` via nohup, log `~/comfyui.log`, or `stop_comfyui.sh`;
+the pane has its button), never with stop/start all. It never touches studio-radar or sinhala-ocr. Stopped 2026-11-09 for ComfyUI: 76% memory free afterwards.
 
 holds the instance secret and is git-ignored, so never commit it.
 

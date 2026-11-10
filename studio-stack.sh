@@ -9,7 +9,8 @@
 #
 # Services: ornith lfm sushi mellum splash vllm image music classify ocr asr omniasr openviking searxng ollama
 # FORCE=1 stops image/music even while they are generating.
-# Never touched: ComfyUI (shown in status only), studio-radar, sinhala-ocr's llama-server (the user's own jobs).
+# ComfyUI: only by name (~/ComfyUI/run_comfyui.sh / stop_comfyui.sh), never by stop/start all.
+# Never touched: studio-radar, sinhala-ocr's llama-server (the user's own jobs).
 export PATH=/opt/homebrew/bin:$PATH
 UID_=$(id -u)
 IP=100.101.212.33
@@ -23,7 +24,7 @@ is_llm() { [[ " $LLMS_ALL " == *" $1 "* ]]; }
 is_agent() { [[ " $AGENTS_ALL " == *" $1 "* ]]; }
 # Process of each LLM server, to see one that is still loading (no listener yet).
 proc_of() { case $1 in splash) echo 'splash serve.*--port 8000';; ornith) echo 'splash serve.*--port 8086';; sushi) echo 'sushi serve';;
-  mellum) echo 'mlx_lm.server --model randmaru';; lfm) echo 'mlx_lm.server --model LiquidAI';; vllm) echo 'vllm serve';; esac; }
+  mellum) echo 'mlx_lm.server --model randmaru';; lfm) echo 'mlx_lm.server --model LiquidAI';; vllm) echo 'vllm serve';; comfyui) echo 'Python main.py';; esac; }
 listener() { lsof -t -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1; }
 # Is a generation running? (a stop would cut it off)
 busy() { curl -s -m 3 "http://127.0.0.1:$1/health" | grep -q '"busy": *true'; }
@@ -36,7 +37,7 @@ is_up() {
   else return 1; fi
 }
 
-is_starting() { is_llm "$1" && ! is_up "$1" && pgrep -f "$(proc_of "$1")" >/dev/null; }
+is_starting() { { is_llm "$1" || [ "$1" = comfyui ]; } && ! is_up "$1" && pgrep -f "$(proc_of "$1")" >/dev/null; }
 
 start_one() {
   is_up "$1" && { echo "$1 already up"; return; }
@@ -48,6 +49,7 @@ start_one() {
     sushi)  nohup ~/sushi-serve.sh > ~/sushi.log 2>&1 & ;;
     mellum) nohup ~/mellum-serve.sh > ~/mellum.log 2>&1 & ;;
     vllm)   nohup ~/vllm-serve.sh > ~/vllm.log 2>&1 & ;;
+    comfyui) nohup ~/ComfyUI/run_comfyui.sh > ~/comfyui.log 2>&1 & ;;
     splash) nohup splash serve --host $IP --port 8000 --model incoai/Qwen3.8-27B-Splash --max-cache-disk 40G > ~/splash.log 2>&1 & ;;
     searxng)
       brew services start colima >/dev/null
@@ -60,6 +62,7 @@ start_one() {
 }
 
 stop_one() {
+  [ "$1" = comfyui ] && { ~/ComfyUI/stop_comfyui.sh; return; }
   if is_starting "$1"; then
     echo "stop $1 (still loading)"
     for pid in $(pgrep -f "$(proc_of "$1")"); do pkill -TERM -P "$pid" 2>/dev/null; kill "$pid"; done
@@ -80,7 +83,7 @@ stop_one() {
   esac
 }
 
-check_name() { [[ " $SERVICES " == *" $1 "* ]] || { echo "unknown service: $1 (one of: $SERVICES)" >&2; exit 2; }; }
+check_name() { [[ " $SERVICES comfyui " == *" $1 "* ]] || { echo "unknown service: $1 (one of: $SERVICES)" >&2; exit 2; }; }
 check_busy() {
   [ "$FORCE" = 1 ] && return
   for s in "$@"; do

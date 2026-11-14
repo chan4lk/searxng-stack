@@ -8,27 +8,27 @@
 #   ~/studio-stack.sh default [ornith|vllm]   # show or set Pi's default model (~/.pi/agent/settings.json)
 #   ~/studio-stack.sh model vllm|splash [MODEL] # show or switch the engine's model (restarts it if up; kept in ~/.studio-models/)
 #
-# Services: ornith lfm sushi mellum splash vllm image music classify ocr asr omniasr openviking searxng ollama
+# Services: ornith lfm fcf sushi mellum splash vllm image music classify ocr asr omniasr openviking searxng ollama
 # FORCE=1 stops image/music even while they are generating.
 # ComfyUI: only by name (~/ComfyUI/run_comfyui.sh / stop_comfyui.sh), never by stop/start all.
 # Never touched: studio-radar, sinhala-ocr's llama-server (the user's own jobs).
 export PATH=/opt/homebrew/bin:$PATH
 UID_=$(id -u)
 IP=100.101.212.33
-LLMS_ALL="ornith lfm sushi mellum splash vllm"
+LLMS_ALL="ornith lfm fcf sushi mellum splash vllm"
 AGENTS_ALL="image music classify ocr asr omniasr openviking"
 SERVICES="$LLMS_ALL $AGENTS_ALL searxng ollama"
 # Started only by name; stopping one also disables its LaunchAgent so it stays off after a reboot.
 OFF_BY_DEFAULT="classify asr omniasr"
 
-port_of() { case $1 in splash) echo 8000;; sushi) echo 8084;; mellum) echo 8085;; ornith) echo 8086;; lfm) echo 8087;; vllm) echo 8088;; comfyui) echo 8188;; esac; }
+port_of() { case $1 in splash) echo 8000;; sushi) echo 8084;; mellum) echo 8085;; ornith) echo 8086;; lfm) echo 8087;; vllm) echo 8088;; fcf) echo 8089;; comfyui) echo 8188;; esac; }
 label_of() { case $1 in openviking) echo com.openviking.server;; *) echo com.searxng-stack.$1-server;; esac; }
 is_llm() { [[ " $LLMS_ALL " == *" $1 "* ]]; }
 is_agent() { [[ " $AGENTS_ALL " == *" $1 "* ]]; }
 is_off_by_default() { [[ " $OFF_BY_DEFAULT " == *" $1 "* ]]; }
 # Process of each LLM server, to see one that is still loading (no listener yet).
 proc_of() { case $1 in splash) echo 'splash serve.*--port 8000';; ornith) echo 'splash serve.*--port 8086';; sushi) echo 'sushi serve';;
-  mellum) echo 'mlx_lm.server --model randmaru';; lfm) echo 'mlx_lm.server --model LiquidAI';; vllm) echo 'vllm serve';; comfyui) echo 'Python main.py';; esac; }
+  mellum) echo 'mlx_lm.server --model randmaru';; lfm) echo 'mlx_lm.server --model LiquidAI';; fcf) echo 'llama-server.*--port 8089';; vllm) echo 'vllm serve';; comfyui) echo 'Python main.py';; esac; }
 # Engines that serve one model at a time from a choice of several (served names; first = default).
 models_of() { case $1 in vllm) echo Qwen3.5-9B-heretic Qwen3.6-35B-A3B;; splash) echo Qwen3.8-27B-Splash Qwen3.6-35B-A3B-Splash;; esac; }
 model_choice() { local m; m=$(cat ~/.studio-models/"$1" 2>/dev/null); [[ " $(models_of "$1") " == *" $m "* ]] || m=$(models_of "$1" | cut -d' ' -f1); echo "$m"; }
@@ -54,6 +54,7 @@ start_one() {
   case $1 in
     ornith) nohup ~/ornith-serve.sh > ~/ornith.log 2>&1 & ;;
     lfm)    nohup ~/lfm-serve.sh > ~/lfm.log 2>&1 & ;;
+    fcf)    nohup ~/fcf-serve.sh > ~/fcf.log 2>&1 & ;;
     sushi)  nohup ~/sushi-serve.sh > ~/sushi.log 2>&1 & ;;
     mellum) nohup ~/mellum-serve.sh > ~/mellum.log 2>&1 & ;;
     vllm)   m=$(model_choice vllm); VLLM_MODEL=$(vllm_repo "$m") VLLM_NAME=$m nohup ~/vllm-serve.sh > ~/vllm.log 2>&1 & ;;

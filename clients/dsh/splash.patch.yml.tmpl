@@ -159,6 +159,26 @@
             contextWindow: 131072
             maxTokens: 32768
 
+      # DavidAU's Qwen3.8-27B TURBO Fable Cold Fusion Heretic NEO-CODER-MAX (Apache-2.0; uncensored dense 27B merge,
+      # reasoning + tool calls + vision) on the Studio: MTP-Q5_K_M GGUF + mmproj served by llama.cpp llama-server
+      # with MTP self-speculation (~/fcf-serve.sh there). Context is FCF_CTX (128K). Same key as Sushi.
+      fcf:
+        displayName: Qwen3.8 FCF
+        api: openai-completions
+        baseURL: http://__SERVER_IP__:8089/v1
+        apiKeyEnv: SUSHI_API_KEY
+        streamIdleTimeoutMs: 300000
+        defaultContextWindow: 131072
+        defaultMaxTokens: 32768
+        compat:
+          supportsDeveloperRole: true
+          maxTokensField: max_tokens
+        models:
+          - id: Qwen3.8-27B-FCF
+            name: Qwen3.8 27B FCF (uncensored)
+            input: [ text, image ]
+            contextWindow: 131072
+            maxTokens: 32768
 # dsh >= 0.2 reads the default model from this entry, not from the settings file.
 - id: agent-default-model
   config:

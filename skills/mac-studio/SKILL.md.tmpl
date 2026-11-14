@@ -48,6 +48,7 @@ foreground, not in the background, so the URL reaches you.
 | **Sushi** (Qwen3.8-Flash-Next-Sushi-3bpw) | `http://__SERVER_IP__:8084` (OpenAI `/v1/chat/completions`, Anthropic `/v1/messages`; API key required, `/health` open) | Foreground `~/sushi-serve.sh` via nohup, **not a service**; log `~/sushi.log` | see below |
 | **Mellum** (Mellum2.1-12B-A2.5B-Thinking, Apache-2.0) | `http://__SERVER_IP__:8085/v1` (OpenAI `/v1/chat/completions`; no auth) | Foreground `~/mellum-serve.sh` via nohup, **not a service**; log `~/mellum.log`; **stopped since 2026-10-15** | see below |
 | **LFM** (LFM2.5-24B-A2B, LFM Open License v1.0) | `http://__SERVER_IP__:8087/v1` (OpenAI `/v1/chat/completions`; no auth) | Foreground `~/lfm-serve.sh` via nohup, **not a service**; log `~/lfm.log` | see below |
+| **FCF** (Qwen3.8-27B TURBO Fable Cold Fusion Heretic NEO-CODER-MAX, Apache-2.0, uncensored) | `http://__SERVER_IP__:8089/v1` (OpenAI `/v1/chat/completions`; Sushi's API key) | Foreground `~/fcf-serve.sh` (llama.cpp `llama-server`) via nohup, **not a service**; log `~/fcf.log` | see below |
 | **Ornith** (Ornith-1.5-35B-A3B, MIT) | `http://__SERVER_IP__:8086/v1` (OpenAI and Anthropic APIs; Sushi's API key) | Foreground `~/ornith-serve.sh` (Splash) via nohup, **not a service**; log `~/ornith.log` | see below |
 | **SearXNG** + Valkey | `http://__SERVER_NAME__.__TAILNET__:8889` (`/search?q=…&format=json`) | Docker Compose on Colima, published with `tailscale serve` | `~/searxng-stack/searxng.sh up\|down\|restart\|status\|logs\|test` |
 | **image-server** (Qwen-Image 2.1 Turbo via mflux) | `http://__SERVER_NAME__.__TAILNET__:8890` (`POST /v1/images/generations`, OpenAI-style) | LaunchAgent `com.searxng-stack.image-server`; model loads on demand | `~/searxng-stack/image-server/image-server.sh install\|status\|logs\|restart\|unload\|test` |
@@ -60,7 +61,7 @@ foreground, not in the background, so the URL reaches you.
 | **Ollama** | `127.0.0.1:11434`, local to the Studio only | macOS app | serves OpenViking's embeddings (`embeddinggemma-2:270m-bf16-text`) |
 
 **Whole stack on/off:** `~/studio-stack.sh stop|start [service]` and `status [--tsv]` (source `studio-stack.sh`
-in the repo, copied by hand; services: ornith lfm sushi mellum splash vllm image music classify ocr asr omniasr
+in the repo, copied by hand; services: ornith lfm fcf sushi mellum splash vllm image music classify ocr asr omniasr
 openviking searxng ollama). The Claude Code mod `studio-services` (`/studio`) draws a pane with a Start/Stop
 button per service over it, plus "Use Splash (Ornith)" / "Use vLLM": `~/studio-stack.sh default ornith|vllm`
 sets Pi's default in `~/.pi/agent/settings.json`, and the mod rewrites dsh's `agent-default-model` in the MacBook's
@@ -233,6 +234,27 @@ on port 8086 serves the official Q4_K_M GGUF with its vision projector and Splas
     `rope_parameters.type` instead of `rope_type`.
   - Ornith's own `ornith-ai/Ornith-1.5-35B-A3B-DFlash` (deleted) is a DFlash v1 draft; Splash
     needs DFlash2.
+
+### FCF (llama.cpp)
+
+DavidAU's `Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF` (Apache-2.0;
+uncensored dense 27B merge for coding, reasoning, tool calls, vision). GGUF only, so Splash, mlx and vLLM can't
+serve it: llama.cpp `llama-server` (Homebrew 0.9.0, Metal; upgraded from 0.5.0 on 2026-11-14, shared with
+ocr-server and sinhala-ocr) runs `MTP-Q5_K_M` (21.2 GB) + `mmproj-F16.gguf` (0.93 GB) from `~/models/qwen38-fcf/`.
+
+- **Start:** `nohup ~/fcf-serve.sh > ~/fcf.log 2>&1 &` (source `llama/fcf-serve.sh` in the repo), or
+  `~/studio-stack.sh start fcf`. Binds `100.101.212.33:8089`, served name `Qwen3.8-27B-FCF`, Sushi's API key,
+  128K context (`FCF_CTX`), one slot, card's coding sampling (temp 0.6, top_p 0.95, top_k 20, rep pen off: it
+  hurts MTP), reasoning in `reasoning_content`. Loads in ~15 s. Not supervised; **ask before stopping it.**
+- **MTP:** `--spec-type draft-mtp --spec-draft-n-max 2` (`FCF_DRAFT`). `~/fcf.log` prints `draft acceptance`
+  per request; measured 79–92% (mean 2.6–2.8 tokens per step). Below 50% the non-MTP quant would be faster.
+- **Measured 2026-11-14:** ~37 tok/s (dense 27B, vs Ornith's ~175 for ~3B active), 30.8 GB RSS at 128K;
+  chat, tool call and image verified.
+- **Reasoning effort** defaults to "xhigh" in the model's jinja template; change it by editing the template
+  (card's instructions) and passing `--chat-template-file`.
+- **Clients:** dsh provider `fcf` (`splash.patch.yml`, text + image); Pi on the Studio provider `fcf` in
+  `~/.pi/agent/models.json` (copied from the `vllm` entry; backup `models.json.bak-20261114`):
+  `pi --provider fcf --model Qwen3.8-27B-FCF`. Defaults unchanged.
 
 ### vLLM (vllm-metal, multi-user test)
 

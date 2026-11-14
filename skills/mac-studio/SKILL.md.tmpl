@@ -46,9 +46,7 @@ foreground, not in the background, so the URL reaches you.
 |---|---|---|---|
 | **Splash** (Qwen3.8-27B LLM) | `http://__SERVER_IP__:8000` (OpenAI `/v1/chat/completions` and Anthropic `/v1/messages`) | Foreground `splash serve` in a login shell, **not a service** | see below |
 | **Sushi** (Qwen3.8-Flash-Next-Sushi-3bpw) | `http://__SERVER_IP__:8084` (OpenAI `/v1/chat/completions`, Anthropic `/v1/messages`; API key required, `/health` open) | Foreground `~/sushi-serve.sh` via nohup, **not a service**; log `~/sushi.log` | see below |
-| **Mellum** (Mellum2.1-12B-A2.5B-Thinking, Apache-2.0) | `http://__SERVER_IP__:8085/v1` (OpenAI `/v1/chat/completions`; no auth) | Foreground `~/mellum-serve.sh` via nohup, **not a service**; log `~/mellum.log`; **stopped since 2026-10-15** | see below |
-| **LFM** (LFM2.5-24B-A2B, LFM Open License v1.0) | `http://__SERVER_IP__:8087/v1` (OpenAI `/v1/chat/completions`; no auth) | Foreground `~/lfm-serve.sh` via nohup, **not a service**; log `~/lfm.log` | see below |
-| **FCF** (Qwen3.8-27B TURBO Fable Cold Fusion Heretic NEO-CODER-MAX, Apache-2.0, uncensored) | `http://__SERVER_IP__:8089/v1` (OpenAI `/v1/chat/completions`; Sushi's API key) | Foreground `~/fcf-serve.sh` (llama.cpp `llama-server`) via nohup, **not a service**; log `~/fcf.log` | see below |
+| **llama-swap** (on-demand LLMs: FCF, 3D Coder, LFM, Mellum) | `http://__SERVER_IP__:8100/v1` (OpenAI and Anthropic APIs; Sushi's API key; web UI `/ui`) | LaunchAgent `com.searxng-stack.llama-swap`; starts each model's server on request, unloads it when idle | `~/searxng-stack/llama-swap/llama-swap.sh install\|status\|logs\|restart`; `~/studio-stack.sh load\|unload [MODEL]` |
 | **Ornith** (Ornith-1.5-35B-A3B, MIT) | `http://__SERVER_IP__:8086/v1` (OpenAI and Anthropic APIs; Sushi's API key) | Foreground `~/ornith-serve.sh` (Splash) via nohup, **not a service**; log `~/ornith.log` | see below |
 | **SearXNG** + Valkey | `http://__SERVER_NAME__.__TAILNET__:8889` (`/search?q=…&format=json`) | Docker Compose on Colima, published with `tailscale serve` | `~/searxng-stack/searxng.sh up\|down\|restart\|status\|logs\|test` |
 | **image-server** (Qwen-Image 2.1 Turbo via mflux) | `http://__SERVER_NAME__.__TAILNET__:8890` (`POST /v1/images/generations`, OpenAI-style) | LaunchAgent `com.searxng-stack.image-server`; model loads on demand | `~/searxng-stack/image-server/image-server.sh install\|status\|logs\|restart\|unload\|test` |
@@ -61,9 +59,11 @@ foreground, not in the background, so the URL reaches you.
 | **Ollama** | `127.0.0.1:11434`, local to the Studio only | macOS app | serves OpenViking's embeddings (`embeddinggemma-2:270m-bf16-text`) |
 
 **Whole stack on/off:** `~/studio-stack.sh stop|start [service]` and `status [--tsv]` (source `studio-stack.sh`
-in the repo, copied by hand; services: ornith lfm fcf sushi mellum splash vllm image music classify ocr asr omniasr
-openviking searxng ollama). The Claude Code mod `studio-services` (`/studio`) draws a pane with a Start/Stop
-button per service over it, plus "Use Splash (Ornith)" / "Use vLLM": `~/studio-stack.sh default ornith|vllm`
+in the repo, copied by hand; services: ornith sushi splash vllm swap image music classify ocr asr omniasr
+openviking searxng ollama; `swap` is llama-swap). The Claude Code mod `studio-services` (`/studio`) draws a pane in three
+sections: **LLMs on demand** (llama-swap's models, Load/Unload and Unload all: `~/studio-stack.sh load|unload [MODEL]`;
+`status --tsv` adds `llm<TAB>id<TAB>loaded|starting|unloaded<TAB>description` lines), **Engines** (the always-on
+servers below and ComfyUI) and **Services**, each with a Start/Stop button, plus "Use Splash (Ornith)" / "Use vLLM": `~/studio-stack.sh default ornith|vllm`
 sets Pi's default in `~/.pi/agent/settings.json`, and the mod rewrites dsh's `agent-default-model` in the MacBook's
 `~/.dsh/splash.patch.yml` (`install.sh` resets it to `ornith`). Switching starts no server. Engines with several models get a model
 switch under their row: `~/studio-stack.sh model vllm|splash [MODEL]` stores the choice in `~/.studio-models/<engine>`
@@ -159,16 +159,13 @@ sliding-window) for coding and agentic tool use. Its `mellum` architecture is ne
 and mlx-lm 0.32.0 is the first release that can. It runs `mlx_lm.server` from `~/mellum/.venv` (uv, `mlx-lm==0.32.0`)
 on the MXFP4 MLX quant `randmaru/Mellum2.1-12B-A2.5B-Thinking-mlx-mxfp4` (6.5 GB, in the HF cache).
 
-- **Start:** `nohup ~/mellum-serve.sh > ~/mellum.log 2>&1 &`. It binds `__SERVER_IP__:8085` with JetBrains'
-  sampling (temp 0.6, top_p 0.95, top_k 20) and `HF_HUB_OFFLINE=1`. Not supervised, gone after a reboot;
-  **ask before stopping it.** Model id: `randmaru/Mellum2.1-12B-A2.5B-Thinking-mlx-mxfp4`.
+- **Runs under llama-swap** (since 2026-11-14) as `Mellum2.1-12B-A2.5B` (alias: the repo id), JetBrains' sampling
+  (temp 0.6, top_p 0.95, top_k 20), `HF_HUB_OFFLINE=1`. `~/mellum-serve.sh` (old port 8085) is no longer used.
 - **API:** thinking comes back in `message.reasoning`, tool calls in `tool_calls` (both verified 2026-10-11).
-- **dsh:** provider `mellum` in `~/.dsh/splash.settings.yaml`, text only; pick it in the model picker. A dsh
-  headless read-fix-run task took 17.6 s.
+- **dsh:** model `Mellum2.1-12B-A2.5B` of provider `studio`, text only. A dsh headless read-fix-run task took 17.6 s.
 - **Memory:** ~3 GB RSS beside Sushi (19% free, ~1.7 GB swap used with both up).
 - Official GGUFs (`JetBrains/Mellum2.1-12B-A2.5B-Thinking-GGUF`) need a llama.cpp that knows `mellum`; the
   Studio's Ollama 0.40.2 is untested with them.
-- **Stopped 2026-10-15** at the user's request to make room for LFM. Start it again with the command above.
 
 ### LFM
 
@@ -178,14 +175,14 @@ is small, ~2.6 GB at 128K). Official 8-bit MLX `LiquidAI/LFM2.5-24B-A2B-MLX-8bit
 served by `mlx_lm.server` from Mellum's venv (`~/mellum/.venv`, mlx-lm 0.32.0; older releases load it but
 route the experts wrong).
 
-- **Start:** `nohup ~/lfm-serve.sh > ~/lfm.log 2>&1 &`. It binds `__SERVER_IP__:8087` with Liquid's sampling
-  (temp 0.1, top_k 50) and `HF_HUB_OFFLINE=1`; the model loads on the first request (~2 s). Not supervised,
-  gone after a reboot; **ask before stopping it.** Model id: `LiquidAI/LFM2.5-24B-A2B-MLX-8bit`.
+- **Runs under llama-swap** (since 2026-11-14) as `LFM2.5-24B-A2B` (alias: `LiquidAI/LFM2.5-24B-A2B-MLX-8bit`),
+  Liquid's sampling (temp 0.1, top_k 50), `HF_HUB_OFFLINE=1`; ~23 s cold start. `~/lfm-serve.sh` (old port 8087)
+  is no longer used.
 - **Repetition penalty:** Liquid recommends 1.05, but `mlx_lm.server` has no flag for it; clients send
   `repetition_penalty` in the request body.
 - **API:** thinking in `message.reasoning`, tool calls in `tool_calls` (verified 2026-10-16).
 - **Measured 2026-10-16** (Ornith also up): ~91 tok/s warm (254 tokens in 2.8 s), tool call 1.5 s.
-- **dsh:** provider `lfm` in `~/.dsh/splash.settings.yaml`, text only.
+- **dsh:** model `LFM2.5-24B-A2B` of provider `studio`, text only.
 - **Memory:** ~25 GB RSS; 73% free beside Ornith.
 - **Strata** (`github.com/Niko1221/Strata`, MIT; checked 2026-10-15) serves only Qwen3.8-Flash-Next
   (and Unsloth's 4–6-bit files on Mac), so it can't run LFM or other models. Its Mac engine is Metal, built
@@ -235,26 +232,43 @@ on port 8086 serves the official Q4_K_M GGUF with its vision projector and Splas
   - Ornith's own `ornith-ai/Ornith-1.5-35B-A3B-DFlash` (deleted) is a DFlash v1 draft; Splash
     needs DFlash2.
 
-### FCF (llama.cpp)
+### llama-swap (on-demand LLMs)
 
-DavidAU's `Qwen3.8-27B-TURBO-Fable-Cold-Fusion-735-882-Heretic-Uncensored-NEO-CODER-MAX-MTP-GGUF` (Apache-2.0;
-uncensored dense 27B merge for coding, reasoning, tool calls, vision). GGUF only, so Splash, mlx and vLLM can't
-serve it: llama.cpp `llama-server` (Homebrew 0.9.0, Metal; upgraded from 0.5.0 on 2026-11-14, shared with
-ocr-server and sinhala-ocr) runs `MTP-Q5_K_M` (21.2 GB) + `mmproj-F16.gguf` (0.93 GB) from `~/models/qwen38-fcf/`.
+[llama-swap](https://github.com/mostlygeek/llama-swap) (MIT; v268, pinned with its SHA-256 in `llama-swap/llama-swap.sh`;
+installed 2026-11-14) is one OpenAI/Anthropic-compatible endpoint, `http://__SERVER_IP__:8100/v1`, for the LLMs in
+`llama-swap/config.yaml`. A request's `model` starts that model's server on a loopback port; it unloads after 30 idle
+minutes (`globalTTL`) or earlier when a newly requested model needs its RAM: the capacity router gives LLMs a 40,000 MB
+`ram` pool and each model its `capacities.ram`, and evicts the fewest models to make room. API key: Sushi's
+(`apiKeys`, from `STUDIO_API_KEY` set by the script); `Authorization: Bearer` and `x-api-key` both work.
 
-- **Start:** `nohup ~/fcf-serve.sh > ~/fcf.log 2>&1 &` (source `llama/fcf-serve.sh` in the repo), or
-  `~/studio-stack.sh start fcf`. Binds `100.101.212.33:8089`, served name `Qwen3.8-27B-FCF`, Sushi's API key,
-  128K context (`FCF_CTX`), one slot, card's coding sampling (temp 0.6, top_p 0.95, top_k 20, rep pen off: it
-  hurts MTP), reasoning in `reasoning_content`. Loads in ~15 s. Not supervised; **ask before stopping it.**
-- **MTP:** `--spec-type draft-mtp --spec-draft-n-max 2` (`FCF_DRAFT`). `~/fcf.log` prints `draft acceptance`
-  per request; measured 79–92% (mean 2.6–2.8 tokens per step). Below 50% the non-MTP quant would be faster.
-- **Measured 2026-11-14:** ~37 tok/s (dense 27B, vs Ornith's ~175 for ~3B active), 30.8 GB RSS at 128K;
-  chat, tool call and image verified.
-- **Reasoning effort** defaults to "xhigh" in the model's jinja template; change it by editing the template
-  (card's instructions) and passing `--chat-template-file`.
-- **Clients:** dsh provider `fcf` (`splash.patch.yml`, text + image); Pi on the Studio provider `fcf` in
-  `~/.pi/agent/models.json` (copied from the `vllm` entry; backup `models.json.bak-20261114`):
-  `pi --provider fcf --model Qwen3.8-27B-FCF`. Defaults unchanged.
+- **Web UI:** `http://__SERVER_IP__:8100/ui` (browser login: any user name, Sushi's key as password): models,
+  load/unload, live logs, activity.
+- **Manage:** `cd ~/searxng-stack/llama-swap && ./llama-swap.sh install|status|logs|restart|validate`. `install`
+  downloads the pinned release to `~/llama-swap/`, checks it, copies `config.yaml` there and (re)loads LaunchAgent
+  `com.searxng-stack.llama-swap` (log `~/Library/Logs/llama-swap.log`). It runs with `-watch-config`: copying a changed
+  `config.yaml` to `~/llama-swap/` reloads it (and unloads running models). `~/studio-stack.sh stop swap` stops it and
+  every model it started.
+- **Adding a model:** a `models:` entry with `cmd` (`${llama}` / `${mlx}` macros, `${PORT}`), `name`, `description`
+  (the pane shows it), `capacities: { ram: MB }`; for mlx_lm.server also `useModelName` (repo id) and
+  `checkEndpoint: /v1/models`. Then add it to the `studio` provider in dsh's template and Pi's `models.json`.
+- **Models** (measured 2026-11-14; cold start = first request until the reply):
+
+  | id | What | Files in `~/models/` or HF cache | RAM | Cold start |
+  |---|---|---|---|---|
+  | `Qwen3.8-27B-FCF` | DavidAU's uncensored dense 27B merge (Apache-2.0), vision, MTP draft 2 (acceptance 79–92% in the log), ~37 tok/s, 128K | `qwen38-fcf/` MTP-Q5_K_M + mmproj-F16 | ~31 GB | 14 s |
+  | `Qwen3.5-4B-3D-Coder` | ccore's early-preview Three.js / coding 4B (Apache-2.0), vision, no MTP (card), ~47 tok/s, 64K; reasons ~20K+ tokens before a scene | `qwen35-3d-coder/` Q8_0 + Qwen3.5-4B mmproj | ~7 GB | 3 s |
+  | `LFM2.5-24B-A2B` | see LFM | HF cache | ~27 GB | 23 s |
+  | `Mellum2.1-12B-A2.5B` | see Mellum | HF cache | ~4 GB | 6 s |
+
+  3D Coder's card system prompt for Three.js: "Use only the Three.js core ES module from
+  https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.module.min.js. Do not import addons or legacy
+  examples/js paths; implement any camera controls directly inside the HTML." FCF's reasoning effort defaults to
+  "xhigh" in its jinja template.
+- **llama.cpp** is Homebrew 0.9.0 (upgraded from 0.5.0 on 2026-11-14 for `--spec-type draft-mtp`; shared with
+  ocr-server and sinhala-ocr).
+- **Clients:** dsh provider `studio` (`splash.patch.yml`) and Pi on the Studio provider `studio` (`~/.pi/agent/models.json`,
+  backups `models.json.bak-20261114*`): `pi --provider studio --model Qwen3.5-4B-3D-Coder`. Defaults unchanged.
+- **Not under llama-swap yet:** Splash, Ornith, vLLM and Sushi (phase 2: vLLM, Ornith, Splash; Sushi last).
 
 ### vLLM (vllm-metal, multi-user test)
 

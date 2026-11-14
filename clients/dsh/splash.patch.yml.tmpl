@@ -71,14 +71,14 @@
             contextWindow: 262144
             maxTokens: 32000
 
-      # Mellum2.1-12B-A2.5B-Thinking (JetBrains, Apache-2.0) on the Studio: MXFP4 MLX quant served by
-      # mlx_lm.server 0.32 (~/mellum-serve.sh there). Sushi and Splash can't load the mellum architecture.
-      # Server takes no auth; dsh-splash exports a placeholder value.
-      mellum:
-        displayName: Mellum
+      # llama-swap on the Studio (llama-swap/config.yaml): one endpoint for the llama.cpp and mlx_lm models. Picking a
+      # model starts it there (first reply waits ~5-25 s); idle ones unload after 30 min or when another needs the RAM.
+      # Same key as Sushi.
+      studio:
+        displayName: Studio (llama-swap)
         api: openai-completions
-        baseURL: http://__SERVER_IP__:8085/v1
-        apiKeyEnv: SPLASH_API_KEY
+        baseURL: http://__SERVER_IP__:8100/v1
+        apiKeyEnv: SUSHI_API_KEY
         streamIdleTimeoutMs: 300000
         defaultContextWindow: 131072
         defaultMaxTokens: 32768
@@ -86,10 +86,26 @@
           supportsDeveloperRole: true
           maxTokensField: max_tokens
         models:
-          - id: randmaru/Mellum2.1-12B-A2.5B-Thinking-mlx-mxfp4
+          # DavidAU's uncensored dense 27B merge (Apache-2.0), MTP; ~37 tok/s.
+          - id: Qwen3.8-27B-FCF
+            name: Qwen3.8 27B FCF (uncensored)
+            input: [ text, image ]
+            contextWindow: 131072
+            maxTokens: 32768
+          # ccore's early-preview 4B for coding and Three.js scenes (Apache-2.0); reasons long before writing code.
+          - id: Qwen3.5-4B-3D-Coder
+            name: Qwen3.5 4B 3D Coder
+            input: [ text, image ]
+            contextWindow: 65536
+            maxTokens: 32768
+          # Liquid AI, LFM Open License v1.0 (check before business use).
+          - id: LFM2.5-24B-A2B
+            name: LFM2.5 24B-A2B
+            contextWindow: 131072
+            maxTokens: 32768
+          # JetBrains, Apache-2.0; thinks before answering.
+          - id: Mellum2.1-12B-A2.5B
             name: Mellum 2.1 12B-A2.5B Thinking
-            # Text only. Thinks before answering; JetBrains' sampling (temp 0.6, top_p 0.95,
-            # top_k 20) is the server default.
             contextWindow: 131072
             maxTokens: 32768
 
@@ -138,47 +154,6 @@
             input: [ text, image ]
             contextWindow: 131072
             maxTokens: 16384
-
-      # LFM2.5-24B-A2B (Liquid AI, LFM Open License v1.0; 24B MoE, ~2B active, reasoning + tool calls) on the
-      # Studio: official 8-bit MLX served by mlx_lm.server 0.32 (~/lfm-serve.sh there). No auth.
-      lfm:
-        displayName: LFM
-        api: openai-completions
-        baseURL: http://__SERVER_IP__:8087/v1
-        apiKeyEnv: SPLASH_API_KEY
-        streamIdleTimeoutMs: 300000
-        defaultContextWindow: 131072
-        defaultMaxTokens: 32768
-        compat:
-          supportsDeveloperRole: true
-          maxTokensField: max_tokens
-        models:
-          - id: LiquidAI/LFM2.5-24B-A2B-MLX-8bit
-            name: LFM2.5 24B-A2B
-            # Text only. Liquid's sampling (temp 0.1, top_k 50) is the server default.
-            contextWindow: 131072
-            maxTokens: 32768
-
-      # DavidAU's Qwen3.8-27B TURBO Fable Cold Fusion Heretic NEO-CODER-MAX (Apache-2.0; uncensored dense 27B merge,
-      # reasoning + tool calls + vision) on the Studio: MTP-Q5_K_M GGUF + mmproj served by llama.cpp llama-server
-      # with MTP self-speculation (~/fcf-serve.sh there). Context is FCF_CTX (128K). Same key as Sushi.
-      fcf:
-        displayName: Qwen3.8 FCF
-        api: openai-completions
-        baseURL: http://__SERVER_IP__:8089/v1
-        apiKeyEnv: SUSHI_API_KEY
-        streamIdleTimeoutMs: 300000
-        defaultContextWindow: 131072
-        defaultMaxTokens: 32768
-        compat:
-          supportsDeveloperRole: true
-          maxTokensField: max_tokens
-        models:
-          - id: Qwen3.8-27B-FCF
-            name: Qwen3.8 27B FCF (uncensored)
-            input: [ text, image ]
-            contextWindow: 131072
-            maxTokens: 32768
 # dsh >= 0.2 reads the default model from this entry, not from the settings file.
 - id: agent-default-model
   config:

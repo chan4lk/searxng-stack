@@ -1,0 +1,70 @@
+# llama-swap (github.com/mostlygeek/llama-swap, MIT) on the Mac Studio: one OpenAI-compatible endpoint,
+# http://100.101.212.33:8100/v1, for every local LLM. A request's `model` starts that server; it unloads after
+# `ttl` idle seconds, or earlier when a newly requested model needs its RAM (capacity router, pool `ram` in MB).
+# Web UI: http://100.101.212.33:8100/ui. Installed by ./llama-swap.sh install (copies this file to ~/llama-swap/).
+# Phase 1 (2026-11-14): llama.cpp and mlx_lm models. Splash, Ornith, vLLM and Sushi still run on their own ports.
+healthCheckTimeout: 300
+globalTTL: 1800
+startPort: 10001
+sendLoadingState: true
+apiKeys:
+  - "${env.STUDIO_API_KEY}"   # Sushi's key (~/.sushi/api-key), set by llama-swap.sh
+
+macros:
+  llama: /opt/homebrew/bin/llama-server --host 127.0.0.1 --port ${PORT} -ngl 999 -fa on --jinja -np 1 --reasoning-format deepseek
+  mlx: ${env.HOME}/mellum/.venv/bin/mlx_lm.server --host 127.0.0.1 --port ${PORT} --max-tokens 32768 --prompt-cache-size 4 --prompt-cache-bytes 2147483648
+  models: ${env.HOME}/models
+
+routing:
+  router:
+    use: capacity
+    settings:
+      capacity:
+        pools:
+          ram: 40000   # MB for LLMs here; the rest of 64 GB is left to image/music/OCR, OpenViking and macOS
+
+models:
+  # DavidAU's uncensored dense 27B merge (Apache-2.0); MTP self-speculation, acceptance in the log ("draft acceptance").
+  Qwen3.8-27B-FCF:
+    name: Qwen3.8 27B FCF (uncensored)
+    description: "~31 GB · 27B dense, MTP"
+    capacities: { ram: 31000 }
+    cmd: |
+      ${llama}
+      -m ${models}/qwen38-fcf/Qwen3.8-27B-TurboFCFusion-735-882-Here-Uncen-NEO-CODER-MAX-MTP-Q5_K_M.gguf
+      --mmproj ${models}/qwen38-fcf/mmproj-F16.gguf
+      -c 131072 --spec-type draft-mtp --spec-draft-n-max 2
+      --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0 --repeat-penalty 1.0
+
+  # ccore's Three.js / general coding 4B (Apache-2.0, early preview). No MTP (card). Long reasoning: allow ~30K output.
+  Qwen3.5-4B-3D-Coder:
+    name: Qwen3.5 4B 3D Coder
+    description: "~7 GB · Three.js scenes"
+    capacities: { ram: 7500 }
+    cmd: |
+      ${llama}
+      -m ${models}/qwen35-3d-coder/Qwen3.5-4B-3D-Coder-Q8_0.gguf
+      --mmproj ${models}/qwen35-3d-coder/mmproj-Qwen3.5-4B-BF16.gguf
+      -c 65536 --temp 0.6 --top-p 0.95 --top-k 20 --min-p 0 --repeat-penalty 1.0
+
+  # Liquid AI LFM2.5-24B-A2B (LFM Open License v1.0: check before business use). Liquid's sampling.
+  LFM2.5-24B-A2B:
+    name: LFM2.5 24B-A2B
+    description: "~27 GB · MoE ~2B active"
+    aliases: [ LiquidAI/LFM2.5-24B-A2B-MLX-8bit ]
+    useModelName: LiquidAI/LFM2.5-24B-A2B-MLX-8bit
+    capacities: { ram: 27000 }
+    env: [ HF_HUB_OFFLINE=1 ]
+    checkEndpoint: /v1/models
+    cmd: ${mlx} --model LiquidAI/LFM2.5-24B-A2B-MLX-8bit --temp 0.1 --top-k 50
+
+  # JetBrains Mellum2.1-12B-A2.5B-Thinking (Apache-2.0), MXFP4 MLX quant. JetBrains' sampling.
+  Mellum2.1-12B-A2.5B:
+    name: Mellum 2.1 12B-A2.5B Thinking
+    description: "~4 GB · MoE coding"
+    aliases: [ randmaru/Mellum2.1-12B-A2.5B-Thinking-mlx-mxfp4 ]
+    useModelName: randmaru/Mellum2.1-12B-A2.5B-Thinking-mlx-mxfp4
+    capacities: { ram: 4000 }
+    env: [ HF_HUB_OFFLINE=1 ]
+    checkEndpoint: /v1/models
+    cmd: ${mlx} --model randmaru/Mellum2.1-12B-A2.5B-Thinking-mlx-mxfp4 --temp 0.6 --top-p 0.95 --top-k 20

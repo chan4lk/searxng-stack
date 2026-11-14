@@ -7,28 +7,32 @@
 #   ~/studio-stack.sh status [--tsv]    # --tsv: "name<TAB>up|starting|down" per service, then "memory<TAB><free %>", "default<TAB><Pi provider>"
 #   ~/studio-stack.sh default [ornith|vllm]   # show or set Pi's default model (~/.pi/agent/settings.json)
 #   ~/studio-stack.sh model vllm|splash [MODEL] # show or switch the engine's model (restarts it if up; kept in ~/.studio-models/)
+#   ~/studio-stack.sh load|unload [MODEL]       # llama-swap (:8100) models: load one now, unload one or (no MODEL) all
 #
-# Services: ornith lfm fcf sushi mellum splash vllm image music classify ocr asr omniasr openviking searxng ollama
+# LLMs behind llama-swap (FCF, 3D Coder, LFM, Mellum: llama-swap/config.yaml) start on request and unload when idle;
+# `swap` is llama-swap itself. status --tsv adds "llm<TAB>id<TAB>loaded|starting|unloaded<TAB>description" per model.
+#
+# Services: ornith sushi splash vllm swap image music classify ocr asr omniasr openviking searxng ollama
 # FORCE=1 stops image/music even while they are generating.
 # ComfyUI: only by name (~/ComfyUI/run_comfyui.sh / stop_comfyui.sh), never by stop/start all.
 # Never touched: studio-radar, sinhala-ocr's llama-server (the user's own jobs).
 export PATH=/opt/homebrew/bin:$PATH
 UID_=$(id -u)
 IP=100.101.212.33
-LLMS_ALL="ornith lfm fcf sushi mellum splash vllm"
-AGENTS_ALL="image music classify ocr asr omniasr openviking"
+LLMS_ALL="ornith sushi splash vllm"
+AGENTS_ALL="swap image music classify ocr asr omniasr openviking"
 SERVICES="$LLMS_ALL $AGENTS_ALL searxng ollama"
 # Started only by name; stopping one also disables its LaunchAgent so it stays off after a reboot.
 OFF_BY_DEFAULT="classify asr omniasr"
 
-port_of() { case $1 in splash) echo 8000;; sushi) echo 8084;; mellum) echo 8085;; ornith) echo 8086;; lfm) echo 8087;; vllm) echo 8088;; fcf) echo 8089;; comfyui) echo 8188;; esac; }
-label_of() { case $1 in openviking) echo com.openviking.server;; *) echo com.searxng-stack.$1-server;; esac; }
+port_of() { case $1 in splash) echo 8000;; sushi) echo 8084;; ornith) echo 8086;; vllm) echo 8088;; comfyui) echo 8188;; esac; }
+label_of() { case $1 in openviking) echo com.openviking.server;; swap) echo com.searxng-stack.llama-swap;; *) echo com.searxng-stack.$1-server;; esac; }
 is_llm() { [[ " $LLMS_ALL " == *" $1 "* ]]; }
 is_agent() { [[ " $AGENTS_ALL " == *" $1 "* ]]; }
 is_off_by_default() { [[ " $OFF_BY_DEFAULT " == *" $1 "* ]]; }
 # Process of each LLM server, to see one that is still loading (no listener yet).
 proc_of() { case $1 in splash) echo 'splash serve.*--port 8000';; ornith) echo 'splash serve.*--port 8086';; sushi) echo 'sushi serve';;
-  mellum) echo 'mlx_lm.server --model randmaru';; lfm) echo 'mlx_lm.server --model LiquidAI';; fcf) echo 'llama-server.*--port 8089';; vllm) echo 'vllm serve';; comfyui) echo 'Python main.py';; esac; }
+  vllm) echo 'vllm serve';; comfyui) echo 'Python main.py';; esac; }
 # Engines that serve one model at a time from a choice of several (served names; first = default).
 models_of() { case $1 in vllm) echo Qwen3.5-9B-heretic Qwen3.6-35B-A3B;; splash) echo Qwen3.8-27B-Splash Qwen3.6-35B-A3B-Splash;; esac; }
 model_choice() { local m; m=$(cat ~/.studio-models/"$1" 2>/dev/null); [[ " $(models_of "$1") " == *" $m "* ]] || m=$(models_of "$1" | cut -d' ' -f1); echo "$m"; }
@@ -53,10 +57,7 @@ start_one() {
   echo "start $1"
   case $1 in
     ornith) nohup ~/ornith-serve.sh > ~/ornith.log 2>&1 & ;;
-    lfm)    nohup ~/lfm-serve.sh > ~/lfm.log 2>&1 & ;;
-    fcf)    nohup ~/fcf-serve.sh > ~/fcf.log 2>&1 & ;;
     sushi)  nohup ~/sushi-serve.sh > ~/sushi.log 2>&1 & ;;
-    mellum) nohup ~/mellum-serve.sh > ~/mellum.log 2>&1 & ;;
     vllm)   m=$(model_choice vllm); VLLM_MODEL=$(vllm_repo "$m") VLLM_NAME=$m nohup ~/vllm-serve.sh > ~/vllm.log 2>&1 & ;;
     comfyui) nohup ~/ComfyUI/run_comfyui.sh > ~/comfyui.log 2>&1 & ;;
     splash) nohup splash serve --host $IP --port 8000 --model incoai/$(model_choice splash) --max-cache-disk 40G > ~/splash.log 2>&1 & ;;
@@ -124,6 +125,9 @@ status() {
   for e in vllm splash; do  # "model.<engine>  <current>  <choices>"
     if [ "$1" = --tsv ]; then printf 'model.%s\t%s\t%s\n' "$e" "$(model_choice $e)" "$(models_of $e)"; else echo "$e model $(model_choice $e) (of: $(models_of $e))"; fi
   done
+  swap_models | while IFS=$'\t' read -r id st desc; do
+    if [ "$1" = --tsv ]; then printf 'llm\t%s\t%s\t%s\n' "$id" "$st" "$desc"; else echo "llm $id $st ($desc)"; fi
+  done
   free=$(memory_pressure | awk -F': ' '/free percentage/{print $2}')
   if [ "$1" = --tsv ]; then printf 'memory\t%s\n' "$free"; printf 'default\t%s\n' "$(default)"; else echo "memory free $free"; echo "pi default $(default)"; fi
 }
@@ -148,6 +152,28 @@ PY
   echo "pi default $1 / $model"
 }
 
+SWAP=http://$IP:8100
+swap_api() { curl -s -m "${2:-10}" -H "Authorization: Bearer $(cat ~/.sushi/api-key)" "${@:3}" "$SWAP$1"; }
+# "id<TAB>loaded|starting|unloaded<TAB>description" per llama-swap model (nothing while llama-swap is down)
+swap_models() {
+  swap_api /v1/models 5 | /usr/bin/python3 -c '
+import json, sys
+try: data = json.load(sys.stdin)["data"]
+except Exception: sys.exit(0)
+for m in data:
+    st = (m.get("status") or {}).get("value", "?")
+    st = {"ready": "loaded", "starting": "starting"}.get(st, st)
+    print(m["id"], st, m.get("description", ""), sep="\t")'
+}
+# Load a llama-swap model now (any request to it starts it; waits until it answers).
+load() {
+  [ -n "$1" ] || { echo "load: MODEL (one of: $(swap_models | cut -f1 | tr '\n' ' '))" >&2; exit 2; }
+  is_up swap || { echo "swap (llama-swap) is down: start swap first" >&2; exit 1; }
+  echo "load $1"; swap_api "/upstream/$1/v1/models" 600 -o /dev/null -w '%{http_code}\n'
+}
+# Unload one llama-swap model, or all of them.
+unload() { echo "unload ${1:-all}"; swap_api "/api/models/unload${1:+/$1}" 60 -X POST -o /dev/null -w '%{http_code}\n'; }
+
 # Show or switch an engine's model. A running engine restarts with it; Pi's default follows a vLLM switch.
 model() {
   [ -n "$(models_of "$1")" ] || { echo "model: vllm or splash" >&2; exit 2; }
@@ -168,5 +194,6 @@ model() {
 case $1 in
   stop|start|status|default) "$1" "$2" ;;
   model) model "$2" "$3" ;;
-  *) echo "usage: $0 stop|start [service] | status [--tsv] | default [ornith|vllm] | model vllm|splash [MODEL]" >&2; exit 2 ;;
+  load|unload) "$1" "$2" ;;
+  *) echo "usage: $0 stop|start [service] | status [--tsv] | default [ornith|vllm] | model vllm|splash [MODEL] | load|unload [MODEL]" >&2; exit 2 ;;
 esac

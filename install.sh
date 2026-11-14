@@ -11,7 +11,7 @@
 #   ~/.claude/splash-settings.json                      Claude Code -> Splash
 #   ~/.claude/skills/<SERVER_NAME>/                     server-management skill
 #   ~/.dsh/splash.settings.yaml, ~/.dsh/splash.patch.yml dsh -> Splash + SearXNG
-#   ~/.dsh/plugins/{searxng-search,cwd-workspace,image-generate,music-generate,studio-guard}.mjs
+#   ~/.dsh/plugins/{searxng-search,cwd-workspace,image-generate,music-generate,ocr-document,studio-guard}.mjs
 #   ~/.claude/splash/claude-splash.zsh                  claude-splash / opencode-splash / pi-splash (sourced)
 #   ~/.claude/splash/{splash-proxy.py,qwen36-discipline.md,hooks/}  Qwen3.6 profile
 #   alias dsh-splash in ~/.zshrc
@@ -128,6 +128,7 @@ install_file clients/dsh/cwd-workspace.mjs         "$HOME/.dsh/plugins/cwd-works
 install_file clients/dsh/image-generate.mjs        "$HOME/.dsh/plugins/image-generate.mjs"
 install_file clients/dsh/tool-args.mjs             "$HOME/.dsh/plugins/tool-args.mjs"
 install_file clients/dsh/music-generate.mjs        "$HOME/.dsh/plugins/music-generate.mjs"
+install_file clients/dsh/ocr-document.mjs          "$HOME/.dsh/plugins/ocr-document.mjs"
 install_file clients/dsh/studio-guard.mjs          "$HOME/.dsh/plugins/studio-guard.mjs"
 echo "Shell (~/.zshrc)"
 add_source claude-splash "source ~/.claude/splash/claude-splash.zsh   # claude-splash [--switch] [3.6|3.8] — Claude Code on Splash"

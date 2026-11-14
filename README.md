@@ -28,6 +28,8 @@ DeepSeek Harness (`dsh`) or self-hosted LLM setups.
 | `image-server/` | On-demand Qwen-Image 2.1 API (mflux/MLX); loads the model per request and unloads when idle |
 | `music-server/` | On-demand ACE-Step 1.5 music API (MIT): starts the ACE-Step server per request and stops it when idle |
 | `clients/dsh/music-generate.mjs` | dsh `generate_music` tool: calls `music-server`, saves audio into the session's workspace |
+| `ocr-server/` | On-demand Surya 2 OCR API (llama.cpp): starts `llama-server` per request and stops it when idle |
+| `clients/dsh/ocr-document.mjs` | dsh `ocr_document` tool: sends a workspace PDF or image to `ocr-server`, returns the text |
 | `install.sh`, `install.env.example` | Installs everything under `clients/` and `skills/` on a client machine |
 
 The server side (this stack) and the client side (the laptop running the
@@ -349,6 +351,49 @@ don't loop. The tools also accept numbers or booleans sent as strings
 **In dsh:** the installer adds a `generate_music` tool, which saves into
 `generated-music/` in the session's workspace. `studio-guard` also stops agents
 from restarting or stopping `music-server`.
+
+## On-demand OCR (`ocr-server/`)
+
+Text from scanned PDFs and images with
+[Surya 2](https://huggingface.co/datalab-to/surya-ocr-2), a 650M-parameter OCR
+model that reads 90+ languages, Sinhala and Tamil included, where PDF text
+layers and general LLMs return nothing or garbled characters. Code is
+Apache-2.0; the weights are OpenRAIL-M (free for personal and research use and
+for companies under $5M revenue).
+
+`ocr-server` **supervises** llama.cpp's `llama-server` running the Q4 GGUF
+(~1.5 GB, Metal). The first request starts it on loopback (~1 s); each page goes
+through surya's own full-page recognition, one page at a time, and the server
+**stops it after 10 idle minutes**. One job runs at a time; up to 4 queue.
+
+```sh
+brew install llama.cpp
+cd ~/searxng-stack/ocr-server
+./ocr-server.sh install           # uv sync, model files, LaunchAgent + tailscale serve on :8893
+./ocr-server.sh test letter.pdf 1 # OCR page 1 and print it
+```
+
+```sh
+curl 'http://<machine>.<tailnet>.ts.net:8893/v1/ocr?filename=letter.pdf&pages=1-2' \
+  --data-binary @letter.pdf -H 'Content-Type: application/octet-stream'
+```
+
+The body is the raw PDF or image. Query parameters: `pages` (`1-3,5`; default
+all, max 100), `dpi` (192), `format` (`text`, or `html` to keep tables),
+`filename` (only echoed back). JSON clients can instead send
+`Content-Type: application/json` with `{"file": "<base64 or data: URL>", "pages": "1-2", ...}`
+(same fields). PDF or image is detected from the file's header. The response has `pages: [{page, text}]`,
+`seconds` and `startup_seconds`. A Sinhala letter page takes ~11–17 s on an M5 Max.
+
+**From Python with any OpenAI-compatible model:** the model can't carry a file
+in a tool argument, so let it name the file and have your code send the bytes.
+`ocr-server/ornith_example.py` gives Ornith an `ocr_document(file_id, pages)`
+tool and posts the base64 to `/v1/ocr`
+(`python3 ornith_example.py receipt.jpg letter.pdf` with `OPENAI_BASE_URL`/`OPENAI_API_KEY` set).
+
+**In dsh:** the installer adds an `ocr_document` tool for any model, e.g. Ornith.
+Results over 40,000 characters are saved to `ocr/<name>.txt` in the workspace.
+`studio-guard` also stops agents from restarting or stopping `ocr-server`.
 
 ## Security notes
 

@@ -1,6 +1,6 @@
 ---
 name: __SERVER_NAME__
-description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash or Sushi (the local Qwen LLM servers), claude-splash, opencode-splash, pi-splash or dsh-splash, the SearXNG search stack, local image generation (Qwen-Image, image-server), Mellum, Ornith, LFM (Liquid AI), music generation (ACE-Step, music-server), text classification (GLiNER2.5-Decide, classify-server), or OpenViking agent memory, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
+description: Use when the user mentions the Mac Studio, "the studio", __SERVER_NAME__, Splash or Sushi (the local Qwen LLM servers), claude-splash, opencode-splash, pi-splash or dsh-splash, the SearXNG search stack, local image generation (Qwen-Image, image-server), Mellum, Ornith, LFM (Liquid AI), music generation (ACE-Step, music-server), text classification (GLiNER2.5-Decide, classify-server), Surya 2 OCR (ocr-server, sinhala-ocr), or OpenViking agent memory, or wants to run, check, restart, deploy or install anything on that remote machine over Tailscale.
 ---
 
 # Managing the Mac Studio
@@ -53,26 +53,32 @@ foreground, not in the background, so the URL reaches you.
 | **image-server** (Qwen-Image 2.1 Turbo via mflux) | `http://__SERVER_NAME__.__TAILNET__:8890` (`POST /v1/images/generations`, OpenAI-style) | LaunchAgent `com.searxng-stack.image-server`; model loads on demand | `~/searxng-stack/image-server/image-server.sh install\|status\|logs\|restart\|unload\|test` |
 | **music-server** (ACE-Step 1.5, MIT) | `http://__SERVER_NAME__.__TAILNET__:8891` (`POST /v1/music/generations`) | LaunchAgent `com.searxng-stack.music-server`; starts ACE-Step (`~/ace-step`) on demand | `~/searxng-stack/music-server/music-server.sh install\|status\|logs\|restart\|unload\|test` |
 | **classify-server** (GLiNER2.5-Decide, Apache-2.0) | `http://__SERVER_NAME__.__TAILNET__:8892` (`POST /v1/classify`) | LaunchAgent `com.searxng-stack.classify-server`; model stays loaded | `~/searxng-stack/classify-server/classify-server.sh install\|status\|logs\|restart\|test` |
+| **ocr-server** (Surya 2 via llama.cpp; code Apache-2.0, weights OpenRAIL-M) | `http://__SERVER_NAME__.__TAILNET__:8893` (`POST /v1/ocr`, raw PDF/image body) | LaunchAgent `com.searxng-stack.ocr-server`; starts `llama-server` (loopback :8124) on demand, stops it after 600 s idle | `~/searxng-stack/ocr-server/ocr-server.sh install\|status\|logs\|restart\|unload\|test` |
+| **sinhala-ocr** (batch pipeline, same Surya 2 model) | `127.0.0.1:8123`, local to the Studio only (llama.cpp `llama-server`; no auth) | Started on demand by a `convert` job; stops itself after 900 s idle | `~/repos/sinhala-ocr/bin/server.sh up\|down\|status\|logs` |
 | **OpenViking** (agent memory, AGPL-3.0) | `http://__SERVER_NAME__.__TAILNET__:1933` (API key required; `/health` is open) | LaunchAgent `com.openviking.server`, published with `tailscale serve` | see below |
 | **Colima** (Docker VM: 2 CPU, 2 GB) | — | `brew services` LaunchAgent, starts at login | `colima status\|start\|stop` |
 | **Ollama** | `127.0.0.1:11434`, local to the Studio only | macOS app | serves OpenViking's embeddings (`embeddinggemma-2:270m-bf16-text`) |
 
-The SearXNG stack is a git checkout of `github.com/chan4lk/searxng-stack`. To
-update it: `cd ~/searxng-stack && git pull && ./searxng.sh restart`. Its `.env`
 **Whole stack on/off:** `~/studio-stack.sh stop|start [service]` and `status [--tsv]` (source `studio-stack.sh`
 in the repo, copied by hand; services: ornith lfm sushi mellum splash vllm image music classify ocr asr omniasr
 openviking searxng ollama). The Claude Code mod `studio-services` (`/studio`) draws a pane with a Start/Stop
 button per service over it, plus "Use Splash (Ornith)" / "Use vLLM": `~/studio-stack.sh default ornith|vllm`
 sets Pi's default in `~/.pi/agent/settings.json`, and the mod rewrites dsh's `agent-default-model` in the MacBook's
-`~/.dsh/splash.patch.yml` (`install.sh` resets it to `ornith`). Switching starts no server. `status` shows an LLM as `starting` while it loads (process up, port not yet
+`~/.dsh/splash.patch.yml` (`install.sh` resets it to `ornith`). Switching starts no server. Engines with several models get a model
+switch under their row: `~/studio-stack.sh model vllm|splash [MODEL]` stores the choice in `~/.studio-models/<engine>`
+(used by every later start) and restarts the engine if it runs. vLLM: `Qwen3.5-9B-heretic` (default) or `Qwen3.6-35B-A3B`;
+Splash: `Qwen3.8-27B-Splash` (default) or `Qwen3.6-35B-A3B-Splash` (OpenViking needs the 27B). Pi and dsh follow a vLLM switch
+when vLLM is their default. `status` shows an LLM as `starting` while it loads (process up, port not yet
 listening; the pane polls until it is up, and `start` won't launch a second copy). `stop` frees RAM for ComfyUI
 (`127.0.0.1:8188`): it kills the LLM servers on 8000/8084–8088,
 boots out the LaunchAgent services and OpenViking, runs `searxng.sh down`, stops Colima and kills Ollama
 (the app respawns its server, so both). It refuses while image/music-server is generating (`FORCE=1`
-overrides). `start` brings them back with `LLMS` (default `ornith`). ComfyUI starts/stops only by name
+overrides). `start` brings them back with `LLMS` (default `ornith`), except classify, asr and omniasr: off by default since 2026-11-11 (`OFF_BY_DEFAULT`), started only by name, and stopping one also `launchctl disable`s it so it stays off after a reboot (`start <name>` re-enables it). ComfyUI starts/stops only by name
 (`start|stop comfyui` runs `~/ComfyUI/run_comfyui.sh` via nohup, log `~/comfyui.log`, or `stop_comfyui.sh`;
 the pane has its button), never with stop/start all. It never touches studio-radar or sinhala-ocr. Stopped 2026-11-09 for ComfyUI: 76% memory free afterwards.
 
+The SearXNG stack is a git checkout of `github.com/chan4lk/searxng-stack`. To
+update it: `cd ~/searxng-stack && git pull && ./searxng.sh restart`. Its `.env`
 holds the instance secret and is git-ignored, so never commit it.
 
 ### Splash
@@ -196,8 +202,6 @@ on port 8086 serves the official Q4_K_M GGUF with its vision projector and Splas
   `local/Ornith-1.5-35B-A3B-GGUF:Q4_K_M`, served name `Ornith-1.5-35B-A3B`, API key from `~/.sushi/api-key`).
   Not supervised; **ask before stopping it.** The first start hashes the 20 GiB file once (~30 s), then loads in ~20 s.
 - **dsh:** provider `ornith` in `~/.dsh/splash.settings.yaml`, `input: [ text, image ]`.
-- **Measured 2026-10-11** (Mellum also up, Sushi off): ~175 tok/s (894 tokens in 5.1 s), tool call ~1 s,
-  image question ~7 s, dsh headless read-fix-run task 11.9 s. 59% memory free with both up.
 - **Pi on the Studio** (since 2026-11-09): `~/.pi/agent/models.json` has provider `ornith`
   (`baseUrl http://__SERVER_IP__:8086/v1`, `"apiKey": "!cat ~/.sushi/api-key"` so the key isn't copied in,
   text + image, 256K context, 32K output), and `~/.pi/agent/settings.json` makes it the default
@@ -210,6 +214,8 @@ on port 8086 serves the official Q4_K_M GGUF with its vision projector and Splas
   default 8, `time_range`) against `http://127.0.0.1:8889` (`$SEARXNG_URL` overrides). The installed
   `@ollama/pi-web-search` package's `web_search`/`web_fetch` fail with `Unauthorized`: they go through
   Ollama to ollama.com, and the Studio's Ollama isn't signed in.
+- **Measured 2026-10-11** (Mellum also up, Sushi off): ~175 tok/s (894 tokens in 5.1 s), tool call ~1 s,
+  image question ~7 s, dsh headless read-fix-run task 11.9 s. 59% memory free with both up.
 - **The GGUF is patched.** Splash 1.1.0 loads GDN `ssm_alpha`/`ssm_beta` only as Q8_0, F32 or BF16
   (`libexec/install/gguf.py`), and the official `ornith-ai/Ornith-1.5-35B-A3B-GGUF` stores them as Q4_K.
   `~/ornith/gguf_ssm_f32.py SRC DST` (run with `~/mellum/.venv/bin/python -I`, which has `gguf`) rewrites
@@ -240,6 +246,12 @@ in the HF cache; Ornith's base model, no clean MLX build of Ornith exists).
   128K context (`VLLM_CTX`, was 64K), prefix caching, reasoning parser `qwen3`, tool parser `qwen3_coder`. Ready in ~20 s.
   Not supervised; **ask before stopping it.** It reserves its budget up front: 28 GB footprint at 0.5
   (KV cache 277K–292K tokens: ~2 users at full 128K context, ~4 at 64K).
+- **Other model:** `VLLM_MODEL=<repo> VLLM_NAME=<served name>` (same port, one model at a time). Downloaded 2026-11-10:
+  `xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic` (Apache-2.0, BF16 safetensors, 18 GB; vllm-metal loads plain HF
+  safetensors too, not only MLX), served as `Qwen3.5-9B-heretic`. Reasoning, tool calls verified; ~25 tok/s single user.
+  Pi's default since 2026-11-11 (`vllm` / `Qwen3.5-9B-heretic`, text only), and `vllm-serve.sh`'s default model since then too
+  (Qwen3.6 now needs `VLLM_MODEL=mlx-community/Qwen3.6-35B-A3B-4bit VLLM_NAME=Qwen3.6-35B-A3B`). `studio-stack.sh default vllm`
+  names whatever vLLM serves (Qwen3.6 if it is down).
 - **Load test:** `~/vllm/loadtest.py --url … --model … --users 1,2,4,8` (source `vllm/loadtest.py`, stdlib only;
   key from `$OPENAI_API_KEY`). Results in `~/vllm/*.txt`. Measured 2026-11-09, 256 max tokens, thinking on:
 
@@ -332,28 +344,35 @@ claude-splash --switch 3.6|3.8 [args] # asks, restarts Splash with it, waits, la
 |---|---|
 | `dsh-splash` | dsh on Splash, web UI by default (profile `web`) |
 | `dsh-splash --profile headless "task"` | One-shot task |
+| `dsh-superagent start\|status\|stop\|restart` | dsh-superagent (GitHub proactive agent), profile `superagent`, panel `127.0.0.1:3082` |
 
-The `web` profile has these plugins: dshmarket (Settings → Plugin Market),
-dsh-better-sidebar@0.19.1, dsh-chat-import, dsh-agent-teams@0.1.22 and
-@openviking/dsh-memory-plugin. The `dsh-tui` npm plugin doesn't work with dsh
-0.1.5, which is installed: it crashes with a blank screen. dsh-tvision worked
-but was removed (the user found it ugly); use `opencode-splash` or `pi-splash`
-for a terminal UI.
+dsh is **0.2.1-rc.5** (global npm, upgraded 2026-11-01 from 0.1.5-rc.1; backup of the old
+profile in `~/.dsh/profiles/web.bak-20261101`). The `web` profile has these plugins: dshmarket@1.73.7
+(Settings → Plugin Market), dsh-better-sidebar@0.28.2, dsh-chat-import@0.26.3,
+@nanmicoder/dsh-agent-teams@0.1.28 and @openviking/dsh-memory-plugin@0.5.31. Use `opencode-splash`
+or `pi-splash` for a terminal UI.
 
-- **Plugin versions:** pin ones built for dsh 0.1.5.
-- **Sidebar image previews (patched 2026-10-13):** dsh-better-sidebar 0.19.1's `/sidebar/file` route
-  rejects relative paths (`is not an absolute path`), and the deliverable cards ("Open" / "Preview in
-  sidebar") pass workspace-relative ones, so images showed as broken. `resolveSessionPath` in the
-  plugin's `lib/index.js` (under `~/.dsh/profiles/web/node_modules/.pnpm/dsh-better-sidebar@0.19.1_*/`)
-  now resolves them against the session cwd; the original is `index.js.orig-20261013`. A reinstall of
-  the plugin drops the patch. 0.22–0.25 still have the bug and need dsh ≥ 0.1.7.
-- **Files tab keeps its tree (patched 2026-10-16):** in the default "Merged" explorer mode a click in the
-  Files tab switched that tab to the file, and the docked tree (open by default only while the tab has no
-  path) closed, so the image replaced the tree. `openFile` in `lib/client-registry.js` (the bundle the
-  browser loads) and `lib/client.js` now carries `meta.treeOpen` over, so files open beside the tree.
-  Originals: `*.orig-20261016`. Lost on reinstall, like the patch above.
-- **Installing:** `dsh plugin add` can fail with
-  `No matching version found for @deepseek-ai/dsh-settings@>=0.1.5 <0.2.0-0`.
+- **dsh 0.2 ignores the settings file for models.** `llm-pi-ai` providers and `agent-default-model`
+  only read their composition entry (`settings.configure({ auto: false })`), so they live in
+  `splash.patch.yml` (template `clients/dsh/splash.patch.yml.tmpl`), not `splash.settings.yaml`.
+  Default model: `ornith` / `Ornith-1.5-35B-A3B`. Symptom when missing: `NO_ADAPTER: no adapter
+  registered for provider …` or a fall back to the paid DeepSeek API (`QUOTA: Insufficient Balance`).
+- **The 0.19.1 sidebar patches are gone** with the upgrade to 0.28.2 (relative image paths, Files tab
+  keeping its tree). Re-check those two behaviours before re-patching; originals are in the backup profile.
+- **dsh-superagent** (`github.com/deepseek-ai/dsh-superagent-prototype`, MIT, research prototype)
+  is checked out and built in `~/src/dsh-superagent`, linked into profile `superagent`
+  (`dsh plugin --profile superagent add -w link:$PWD`). Its `scripts/dsh-superagent` runs dsh in
+  tmux session `dsh-superagent` without `--patch`, so `~/.dsh/profiles/superagent/cordis.patch.yml`
+  holds the machine config (port 3082, `stateDir` `~/.dsh/state/superagent`) **plus a copy of
+  `splash.patch.yml`**: re-copy it after `./install.sh` changes that file. The alias exports
+  `SPLASH_API_KEY`/`SUSHI_API_KEY`; a tmux server started without them gives the agent no model.
+  Agent GitHub CLI: `~/.local/bin/gh-agent` (`GH_CONFIG_DIR=~/.config/gh-agent`), signed in as `chanbistec`.
+  Configured 2026-11-01: repository `chanbistec/dsh-subagent` (local clone `~/src/dsh-subagent`, one
+  worktree per Ticket), allowed requester `chan4lk`, accept mode `observe`, no auto-merge, commits as chanbistec.
+  Setup steps: `~/src/dsh-superagent/SETUP.md` and `docs/006-deployment.md`.
+- **`*` peer dependencies:** `dsh plugin add` turns them into `>=0.2.1 <0.3.0`, which excludes the
+  installed prerelease (`ERR_PNPM_NO_MATCHING_VERSION … dsh-client-ui-slots`). Add such a plugin with
+  plain `pnpm add -w --config.auto-install-peers=false <pkg>@<ver>` in the profile directory.
 - **The web profile reloads live:** writing a bundle into `package.json` before
   its package is installed breaks the running instance.
 - **Safe route:** install into a copy of the profile (e.g. `web-stage`) and
@@ -474,6 +493,12 @@ outside it. They find the server through `config.url` on their entry in
 works the same way. If a tool reports `unreachable at http://127.0.0.1:…`,
 neither value reached it: re-run `./install.sh` and restart dsh.
 
+**From Pi on the Studio** (since 2026-11-09): `~/.pi/agent/extensions/image-generate.ts` (source
+`clients/pi/image-generate.ts`, copied by hand, not by `install.sh`) ports both tools with the same
+parameters and save layout under Pi's cwd. It calls `http://127.0.0.1:8890` (`$IMAGE_SERVER_URL` overrides);
+on the Studio the loopback port answers, the Tailscale IP gives 404. Results tell the model to view the
+file with Pi's `read` tool. Tested with Ornith: generate and edit both work.
+
 The chat UI only draws images on `read_image`'s own card, so when the current
 model accepts images, the result tells the agent to call `read_image` on the
 saved file. The Sushi and 35B-A3B entries declare image input (`input: [text, image]`
@@ -483,12 +508,6 @@ in `splash.settings.yaml`); on the 27B and Mellum the image is saved but not sho
 
 It supervises ACE-Step 1.5's own API server (`~/ace-step`, pinned commit
 ca1e85f, models in `~/ace-step/checkpoints`). The first request starts
-**From Pi on the Studio** (since 2026-11-09): `~/.pi/agent/extensions/image-generate.ts` (source
-`clients/pi/image-generate.ts`, copied by hand, not by `install.sh`) ports both tools with the same
-parameters and save layout under Pi's cwd. It calls `http://127.0.0.1:8890` (`$IMAGE_SERVER_URL` overrides);
-on the Studio the loopback port answers, the Tailscale IP gives 404. Results tell the model to view the
-file with Pi's `read` tool. Tested with Ornith: generate and edit both work.
-
 `acestep-api` on `127.0.0.1:8001`, with the MLX LM backend and the
 `acestep-5Hz-lm-1.7B` planner. After 10 idle minutes it stops that process
 entirely, which frees all its memory. When idle the service uses ~50 MB.
@@ -524,6 +543,48 @@ curl -s http://__SERVER_NAME__.__TAILNET__:8892/v1/classify -H 'content-type: ap
   the encoder window), `batch_size` (8).
 - **Responses:** without confidence a single-label task returns a string;
   with confidence it returns `{label, confidence}`.
+
+### ocr-server
+
+Surya 2 OCR (`datalab-to/surya-ocr-2`, 650M params, Q4 GGUF) as a tailnet API, for agents and any client.
+Reads Sinhala and Tamil where PDF text layers and general LLMs fail. The service supervises llama.cpp
+`llama-server` (Homebrew) on `127.0.0.1:8124` with `--alias datalab-to/surya-ocr-2` (surya's client sends that
+model name) and runs surya's full-page recognition (`RecognitionPredictor(full_page=True)`) one page at a time.
+
+- **Request:** `POST /v1/ocr?pages=1-3&format=text|html&dpi=192`, body = raw file bytes; or JSON
+  `{"file": "<base64 or data: URL>", "pages", "format", "dpi", "filename"}`. PDF vs image comes from the
+  file header (`%PDF-`), never the name.
+  Returns `pages: [{page, text}]`, `seconds`, `startup_seconds`. Max 100 pages and 100 MB per call;
+  one job at a time, 4 queued (429 beyond).
+- **Model files:** `ocr-server/models/` holds hard links to `~/repos/sinhala-ocr/.models/` (no extra disk);
+  `install` downloads them when that copy is missing.
+- **Measured 2026-10-18:** model start ~1 s; a Sinhala letter page 11 s, an English form page 16.6 s.
+- **Logs:** service `~/Library/Logs/ocr-server.log`, llama-server `~/Library/Logs/ocr-backend.log`.
+- **dsh:** tool `ocr_document` (`clients/dsh/ocr-document.mjs`), available to every model incl. Ornith.
+  Results over 40,000 characters are saved to `ocr/<name>.txt` in the workspace.
+- A surya inference failure (it logs a warning and returns an empty page) becomes HTTP 502, not empty text.
+
+### Surya 2 OCR (sinhala-ocr)
+
+`datalab-to/surya-ocr-2`, a 650M-parameter OCR vision-language model, as a Q4 GGUF
+(`.models/surya-2.gguf` 1.27 GB + `surya-2-mmproj.gguf` 205 MB) served by llama.cpp `llama-server` on
+Metal. It lives in `~/repos/sinhala-ocr` on the Studio, a pipeline that OCRs Sinhala government letters
+(SLMC appointment, grade and reporting letters) and extracts their dates. A date is only reported if it
+appears in the OCR text, with the surrounding text stored as evidence.
+
+- **Server:** binds `127.0.0.1:8123`, one slot (`--parallel 1`), 64k context. Not published to the tailnet.
+  A `convert` job starts it; a detached watchdog kills it after 900 s with no request, so the model is not
+  resident between jobs. `--keep-server` on `convert` reuses a warm server.
+- **Studio:** `bin/sinhala-ocr convert in --out out` (resumable: skips docs with a `.done` marker),
+  `bin/sinhala-ocr dates --out out` (rebuild `out/dates.json`, no model), `bin/sinhala-ocr doctor`.
+- **MacBook:** `bin/macos/run.sh start|tail|status|fetch` rsyncs `~/Downloads/PDF` up, runs the batch and
+  fetches results to `~/Downloads/PDF-ocr`.
+- **Output** per document `out/<PDF stem>/`: `text.txt` (`===== PAGE n =====` markers), `blocks.json`
+  (raw Surya page dumps), `.done` (sha256, pages, seconds).
+- **Settings:** `SINHALA_OCR_PORT` (8123), `SINHALA_OCR_IDLE` (900), `SINHALA_OCR_CTX` (65536),
+  `SINHALA_OCR_STARTUP` (300), `LLAMA_CPP_BINARY`, `--dpi` (192).
+- **Corpus:** 2,489 PDFs in `in/`, all with results in `out/` (as of 2026-10-18).
+- **Never kill its `llama-server`** to free memory; it is the user's job.
 
 ### Malformed tool calls (dsh)
 

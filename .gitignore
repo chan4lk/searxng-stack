@@ -4,3 +4,6 @@ install.env
 image-server/.venv/
 __pycache__/
 classify-server/.venv/
+ornith.env
+ocr-server/.venv/
+ocr-server/models/

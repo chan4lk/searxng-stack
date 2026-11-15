@@ -1,29 +1,27 @@
 # claude-splash / opencode-splash / pi-splash: coding agents on the Mac Studio's
-# Splash server, using whichever model Splash has loaded. Sourced from ~/.zshrc.
-# All three take the same leading arguments as claude-splash below.
+# Splash models, through llama-swap (http://__SERVER_IP__:8100), which starts the
+# requested model on demand. Sourced from ~/.zshrc. All three take the same
+# leading arguments as claude-splash below.
 #
-#   claude-splash [args...]                 use the loaded model
-#   claude-splash 3.6|3.8 [args...]         require that model; error if another is loaded
-#   claude-splash --switch 3.6|3.8 [args]   restart Splash on the Studio with that model
-#                                           (asks first: it drops every Splash client)
+#   claude-splash [args...]            Qwen3.8-27B Splash (the default)
+#   claude-splash 3.6|3.8 [args...]    pick the Splash model
+#   claude-splash --switch 3.6|3.8 ... same as above (kept for old habits; nothing restarts)
 #
-# Splash serves ONE model at a time, so every model setting (main, Opus/Sonnet/
-# Haiku defaults, subagents) is pointed at the same model, via a per-run copy of
-# ~/.claude/splash-settings.json. MCP servers and claude.ai connectors are left
-# out: they add ~60K prompt tokens and ~2 minutes to each session's first reply.
-# Splash is started with --max-cache-disk 40G (SSD tier for evicted prompt caches).
+# The first request after the model has been idle (30 min; 2 h for 3.6) waits for
+# it to load. Every model setting (main, Opus/Sonnet/Haiku defaults, subagents) is
+# pointed at the same model, via a per-run copy of ~/.claude/splash-settings.json.
+# MCP servers and claude.ai connectors are left out: they add ~60K prompt tokens
+# and ~2 minutes to each session's first reply. Splash runs with --max-cache-disk
+# 40G (SSD tier for evicted prompt caches). Key: Sushi's (~/.sushi-api-key).
 
 typeset -gA _SPLASH_MODELS=(
   3.6 incoai/Qwen3.6-35B-A3B-Splash
   3.8 incoai/Qwen3.8-27B-Splash
 )
-_SPLASH_URL=http://__SERVER_IP__:8000
-_SPLASH_STUDIO=~/.claude/skills/__SERVER_NAME__/scripts/studio.sh
+_STUDIO_URL=http://__SERVER_IP__:8100
+_SPLASH_URL=$_STUDIO_URL
 
-_splash_loaded() {
-  curl -s -m 5 "$_SPLASH_URL/v1/models" 2>/dev/null |
-    python3 -c 'import json,sys; print(json.load(sys.stdin)["data"][0]["id"])' 2>/dev/null
-}
+_studio_key() { cat ~/.sushi-api-key 2>/dev/null; }
 
 _splash_resolve() {  # 3.6 | 36 | full id -> full id
   local key=${1//[^0-9.]/}
@@ -34,57 +32,24 @@ _splash_resolve() {  # 3.6 | 36 | full id -> full id
   else return 1; fi
 }
 
-_splash_switch() {
-  local want=$1 now
-  now=$(_splash_loaded)
-  if [[ $now == $want ]]; then
-    print "claude-splash: $want is already loaded"
-    return 0
-  fi
-  print "claude-splash: Splash has ${now:-nothing (server down)} loaded."
-  print "Switching to $want restarts Splash on the Studio. It takes about a minute, and"
-  print "every Splash client drops meanwhile: dsh sessions, OpenViking, other claude-splash sessions."
-  read -q "?Switch now? [y/N] " || { print; return 1; }
-  print
-  bash $_SPLASH_STUDIO run "pkill -f 'splash serve|libexec/server/server.py'; sleep 3; nohup splash serve --host __SERVER_IP__ --port 8000 --model $want --max-cache-disk 40G > ~/splash.log 2>&1 &" ||
-    { print "claude-splash: could not reach the Studio" >&2; return 1; }
-  local i
-  for i in {1..60}; do
-    sleep 5
-    [[ $(_splash_loaded) == $want ]] && { print "claude-splash: $want loaded"; return 0; }
-    print -n .
-  done
-  print "\nclaude-splash: $want still not listed after 5 minutes; check ~/splash.log on the Studio" >&2
-  return 1
-}
-
-# _splash_pick NAME ARGS... — parse [--switch] [3.6|3.8], switch if asked, and
-# set REPLY to the loaded model id; sets _SPLASH_SHIFT to how many args it used.
+# _splash_pick NAME ARGS... — parse [--switch] [3.6|3.8] and set REPLY to the model id
+# (default 3.8); sets _SPLASH_SHIFT to how many args it used. Fails if llama-swap is down.
 _splash_pick() {
   local name=$1; shift
-  local switch=0 want=
   _SPLASH_SHIFT=0
   if [[ $1 == --switch ]]; then
-    switch=1
-    want=$(_splash_resolve "$2") || { print "usage: $name --switch 3.6|3.8 [args]" >&2; return 2; }
+    REPLY=$(_splash_resolve "$2") || { print "usage: $name [--switch] 3.6|3.8 [args]" >&2; return 2; }
     _SPLASH_SHIFT=2
-  elif [[ $1 != -* ]] && want=$(_splash_resolve "$1" 2>/dev/null); then
+  elif [[ $1 != -* ]] && REPLY=$(_splash_resolve "$1" 2>/dev/null); then
     _SPLASH_SHIFT=1
   else
-    want=
+    REPLY=${_SPLASH_MODELS[3.8]}
   fi
-  if (( switch )); then _splash_switch $want || return 1; fi
-  REPLY=$(_splash_loaded)
-  if [[ -z $REPLY ]]; then
-    print "$name: Splash isn't answering at $_SPLASH_URL (start it with: $name --switch 3.8)" >&2
+  if ! curl -s -m 5 -o /dev/null -f -H "authorization: Bearer $(_studio_key)" $_STUDIO_URL/v1/models; then
+    print "$name: llama-swap isn't answering at $_STUDIO_URL (on the Studio: ~/studio-stack.sh start swap; key in ~/.sushi-api-key)" >&2
     return 1
   fi
-  if [[ -n $want && $want != $REPLY ]]; then
-    print "$name: $want requested, but Splash has $REPLY loaded." >&2
-    print "Use '$name --switch ${(k)_SPLASH_MODELS[(r)$want]:-<3.6|3.8>}' to swap, or '$name' to use $REPLY." >&2
-    return 1
-  fi
-  print -u2 "$name: $REPLY"
+  print -u2 "$name: $REPLY (loads on first request if idle)"
 }
 
 # Qwen3.6 profile: applied when the 35B-A3B is loaded. SPLASH_PROFILE=off skips it
@@ -98,23 +63,20 @@ _SPLASH_DIR=${0:A:h}
 
 claude-splash() {
   _splash_pick claude-splash "$@" || return; shift $_SPLASH_SHIFT
-  _claude_local claude-splash $_SPLASH_URL "$REPLY" splash-local 131072 splash "$@"
+  _claude_local claude-splash $_SPLASH_URL "$REPLY" "$(_studio_key)" 131072 splash "$@"
 }
 
-# Claude Code on vLLM (vllm-metal on the Studio, :8088, ~/vllm-serve.sh there): the same
-# Qwen3.6 base model, batched for many users. Same profile as claude-splash. The context
-# limit is the server's max_model_len (VLLM_CTX, 64K by default), read from /v1/models.
-_VLLM_URL=http://__SERVER_IP__:8088
+# Claude Code on vLLM (vllm-metal under llama-swap on the Studio): Qwen3.6-35B-A3B by default
+# (CLAUDE_VLLM_MODEL=Qwen3.5-9B-heretic for the other), batched for many users. Same profile as
+# claude-splash. Context 128K (vLLM's --max-model-len in llama-swap/config.yaml).
 claude-vllm() {
-  local key=$(cat ~/.sushi-api-key 2>/dev/null) info
-  info=$(curl -s -m 5 -H "authorization: Bearer $key" $_VLLM_URL/v1/models 2>/dev/null |
-    python3 -c 'import json,sys; m=json.load(sys.stdin)["data"][0]; print(m["id"], m.get("max_model_len") or 65536)' 2>/dev/null)
-  if [[ -z $info ]]; then
-    print "claude-vllm: vLLM isn't answering at $_VLLM_URL (start it in /studio, or on the Studio: ~/studio-stack.sh start vllm)" >&2
+  local model=${CLAUDE_VLLM_MODEL:-Qwen3.6-35B-A3B}
+  if ! curl -s -m 5 -o /dev/null -f -H "authorization: Bearer $(_studio_key)" $_STUDIO_URL/v1/models; then
+    print "claude-vllm: llama-swap isn't answering at $_STUDIO_URL (on the Studio: ~/studio-stack.sh start swap)" >&2
     return 1
   fi
-  print -u2 "claude-vllm: ${info% *} (context ${info#* })"
-  _claude_local claude-vllm $_VLLM_URL "${info% *}" "$key" "${info#* }" vllm "$@"
+  print -u2 "claude-vllm: $model (loads on first request if idle)"
+  _claude_local claude-vllm $_STUDIO_URL "$model" "$(_studio_key)" 131072 vllm "$@"
 }
 
 # _claude_local NAME URL MODEL TOKEN CONTEXT PROXY_MODE ARGS... — run Claude Code against a

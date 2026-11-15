@@ -2,8 +2,9 @@
 # http://100.101.212.33:8100/v1, for every local LLM. A request's `model` starts that server; it unloads after
 # `ttl` idle seconds, or earlier when a newly requested model needs its RAM (capacity router, pool `ram` in MB).
 # Web UI: http://100.101.212.33:8100/ui. Installed by ./llama-swap.sh install (copies this file to ~/llama-swap/).
-# Phase 1 (2026-11-14): llama.cpp and mlx_lm models. Splash, Ornith, vLLM and Sushi still run on their own ports.
-healthCheckTimeout: 300
+# Every LLM on the Studio runs here (since 2026-11-14): llama.cpp, mlx_lm, Splash, vLLM and Sushi servers. Backends bind
+# loopback ports without keys of their own; llama-swap checks the key.
+healthCheckTimeout: 600   # Sushi and vLLM take minutes on a cold start
 globalTTL: 1800
 startPort: 10001
 sendLoadingState: true
@@ -12,6 +13,9 @@ apiKeys:
 
 macros:
   llama: /opt/homebrew/bin/llama-server --host 127.0.0.1 --port ${PORT} -ngl 999 -fa on --jinja -np 1 --reasoning-format deepseek
+  splash: /opt/homebrew/bin/splash serve --host 127.0.0.1 --port ${PORT} --allowed-host 100.101.212.33 --allowed-host mac-studio.tail3caa2f.ts.net  # llama-swap passes the client Host header through
+  # vllm serve wants the model first: cmd is /opt/homebrew/bin/vllm serve <repo> ${vllm_args}
+  vllm_args: --host 127.0.0.1 --port ${PORT} --gpu-memory-utilization 0.5 --max-model-len 131072 --enable-prefix-caching --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_coder
   mlx: ${env.HOME}/mellum/.venv/bin/mlx_lm.server --host 127.0.0.1 --port ${PORT} --max-tokens 32768 --prompt-cache-size 4 --prompt-cache-bytes 2147483648
   models: ${env.HOME}/models
 
@@ -21,7 +25,7 @@ routing:
     settings:
       capacity:
         pools:
-          ram: 40000   # MB for LLMs here; the rest of 64 GB is left to image/music/OCR, OpenViking and macOS
+          ram: 50000   # MB for LLMs; the rest of 64 GB is left to image/music/OCR, OpenViking and macOS
 
 models:
   # DavidAU's uncensored dense 27B merge (Apache-2.0); MTP self-speculation, acceptance in the log ("draft acceptance").
@@ -68,3 +72,55 @@ models:
     env: [ HF_HUB_OFFLINE=1 ]
     checkEndpoint: /v1/models
     cmd: ${mlx} --model randmaru/Mellum2.1-12B-A2.5B-Thinking-mlx-mxfp4 --temp 0.6 --top-p 0.95 --top-k 20
+
+  # Splash (Qwen3.8-27B, dense). Served name = the repo id. --max-cache-disk keeps evicted prompt caches on the SSD.
+  incoai/Qwen3.8-27B-Splash:
+    name: Qwen3.8 27B Splash
+    description: "~18 GB · Splash, dense 27B"
+    capacities: { ram: 18000 }
+    checkEndpoint: /v1/models
+    cmd: ${splash} --model incoai/Qwen3.8-27B-Splash --max-cache-disk 40G
+
+  # Splash (Qwen3.6-35B-A3B, MoE): OpenViking's model (summaries, memory extraction); kept 2 h when idle.
+  incoai/Qwen3.6-35B-A3B-Splash:
+    name: Qwen3.6 35B-A3B Splash
+    description: "~22 GB · Splash, MoE ~3B active"
+    capacities: { ram: 22000 }
+    ttl: 7200
+    checkEndpoint: /v1/models
+    cmd: ${splash} --model incoai/Qwen3.6-35B-A3B-Splash --max-cache-disk 40G
+
+  # Ornith-1.5-35B-A3B (MIT), patched official GGUF (local cache repo, see the skill) + Splash's DFlash2 draft.
+  # Pi's and dsh's usual default: kept 2 h when idle.
+  Ornith-1.5-35B-A3B:
+    name: Ornith 1.5 35B-A3B
+    description: "~24 GB · Splash + DFlash2, ~175 tok/s"
+    capacities: { ram: 24000 }
+    ttl: 7200
+    env: [ HF_HUB_OFFLINE=1 ]
+    checkEndpoint: /v1/models
+    cmd: |
+      ${splash} --model local/Ornith-1.5-35B-A3B-GGUF:Q4_K_M --served-model-name Ornith-1.5-35B-A3B
+      --draft-model incoai/Qwen3.6-35B-A3B-DFlash2 --max-cache-disk 20G
+
+  # vLLM (vllm-metal): continuous batching for many users. Reserves half the RAM up front whatever the model.
+  Qwen3.5-9B-heretic:
+    name: Qwen3.5 9B heretic (vLLM)
+    description: "~33 GB reserved · vLLM, many users"
+    capacities: { ram: 33000 }
+    env: [ HF_HUB_OFFLINE=1 ]
+    cmd: /opt/homebrew/bin/vllm serve xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic ${vllm_args} --served-model-name Qwen3.5-9B-heretic
+
+  Qwen3.6-35B-A3B:
+    name: Qwen3.6 35B-A3B (vLLM)
+    description: "~33 GB reserved · vLLM, many users"
+    capacities: { ram: 33000 }
+    env: [ HF_HUB_OFFLINE=1 ]
+    cmd: /opt/homebrew/bin/vllm serve mlx-community/Qwen3.6-35B-A3B-4bit ${vllm_args} --served-model-name Qwen3.6-35B-A3B
+
+  # Sushi (Qwen3.8-Flash-Next 3bpw, 80 GB on disk, experts streamed from the SSD): needs nearly all the pool.
+  Qwen3.8-Flash-Next-Sushi-3bpw:
+    name: Qwen3.8 Flash-Next Sushi
+    description: "~46 GB · Sushi, unloads everything else"
+    capacities: { ram: 46000 }
+    cmd: ${env.HOME}/searxng-stack/llama-swap/sushi.sh ${PORT}

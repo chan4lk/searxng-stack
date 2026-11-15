@@ -44,10 +44,7 @@ foreground, not in the background, so the URL reaches you.
 
 | Service | Endpoint | How it runs | Manage |
 |---|---|---|---|
-| **Splash** (Qwen3.8-27B LLM) | `http://__SERVER_IP__:8000` (OpenAI `/v1/chat/completions` and Anthropic `/v1/messages`) | Foreground `splash serve` in a login shell, **not a service** | see below |
-| **Sushi** (Qwen3.8-Flash-Next-Sushi-3bpw) | `http://__SERVER_IP__:8084` (OpenAI `/v1/chat/completions`, Anthropic `/v1/messages`; API key required, `/health` open) | Foreground `~/sushi-serve.sh` via nohup, **not a service**; log `~/sushi.log` | see below |
-| **llama-swap** (on-demand LLMs: FCF, 3D Coder, LFM, Mellum) | `http://__SERVER_IP__:8100/v1` (OpenAI and Anthropic APIs; Sushi's API key; web UI `/ui`) | LaunchAgent `com.searxng-stack.llama-swap`; starts each model's server on request, unloads it when idle | `~/searxng-stack/llama-swap/llama-swap.sh install\|status\|logs\|restart`; `~/studio-stack.sh load\|unload [MODEL]` |
-| **Ornith** (Ornith-1.5-35B-A3B, MIT) | `http://__SERVER_IP__:8086/v1` (OpenAI and Anthropic APIs; Sushi's API key) | Foreground `~/ornith-serve.sh` (Splash) via nohup, **not a service**; log `~/ornith.log` | see below |
+| **llama-swap**: every LLM (Splash, Ornith, vLLM, Sushi, FCF, 3D Coder, LFM, Mellum) | `http://__SERVER_IP__:8100/v1` (OpenAI `/v1/chat/completions` and Anthropic `/v1/messages`; Sushi's API key; web UI `/ui`) | LaunchAgent `com.searxng-stack.llama-swap`; starts the requested model's server on request, unloads it when idle or when another needs the RAM | `~/searxng-stack/llama-swap/llama-swap.sh install\|status\|logs\|restart`; `~/studio-stack.sh load\|unload [MODEL]` |
 | **SearXNG** + Valkey | `http://__SERVER_NAME__.__TAILNET__:8889` (`/search?q=…&format=json`) | Docker Compose on Colima, published with `tailscale serve` | `~/searxng-stack/searxng.sh up\|down\|restart\|status\|logs\|test` |
 | **image-server** (Qwen-Image 2.1 Turbo via mflux) | `http://__SERVER_NAME__.__TAILNET__:8890` (`POST /v1/images/generations`, OpenAI-style) | LaunchAgent `com.searxng-stack.image-server`; model loads on demand | `~/searxng-stack/image-server/image-server.sh install\|status\|logs\|restart\|unload\|test` |
 | **music-server** (ACE-Step 1.5, MIT) | `http://__SERVER_NAME__.__TAILNET__:8891` (`POST /v1/music/generations`) | LaunchAgent `com.searxng-stack.music-server`; starts ACE-Step (`~/ace-step`) on demand | `~/searxng-stack/music-server/music-server.sh install\|status\|logs\|restart\|unload\|test` |
@@ -59,22 +56,19 @@ foreground, not in the background, so the URL reaches you.
 | **Ollama** | `127.0.0.1:11434`, local to the Studio only | macOS app | serves OpenViking's embeddings (`embeddinggemma-2:270m-bf16-text`) |
 
 **Whole stack on/off:** `~/studio-stack.sh stop|start [service]` and `status [--tsv]` (source `studio-stack.sh`
-in the repo, copied by hand; services: ornith sushi splash vllm swap image music classify ocr asr omniasr
-openviking searxng ollama; `swap` is llama-swap). The Claude Code mod `studio-services` (`/studio`) draws a pane in three
-sections: **LLMs on demand** (llama-swap's models, Load/Unload and Unload all: `~/studio-stack.sh load|unload [MODEL]`;
-`status --tsv` adds `llm<TAB>id<TAB>loaded|starting|unloaded<TAB>description` lines), **Engines** (the always-on
-servers below and ComfyUI) and **Services**, each with a Start/Stop button, plus "Use Splash (Ornith)" / "Use vLLM": `~/studio-stack.sh default ornith|vllm`
-sets Pi's default in `~/.pi/agent/settings.json`, and the mod rewrites dsh's `agent-default-model` in the MacBook's
-`~/.dsh/splash.patch.yml` (`install.sh` resets it to `ornith`). Switching starts no server. Engines with several models get a model
-switch under their row: `~/studio-stack.sh model vllm|splash [MODEL]` stores the choice in `~/.studio-models/<engine>`
-(used by every later start) and restarts the engine if it runs. vLLM: `Qwen3.5-9B-heretic` (default) or `Qwen3.6-35B-A3B`;
-Splash: `Qwen3.8-27B-Splash` (default) or `Qwen3.6-35B-A3B-Splash` (OpenViking needs the 27B). Pi and dsh follow a vLLM switch
-when vLLM is their default. `status` shows an LLM as `starting` while it loads (process up, port not yet
-listening; the pane polls until it is up, and `start` won't launch a second copy). `stop` frees RAM for ComfyUI
-(`127.0.0.1:8188`): it kills the LLM servers on 8000/8084–8088,
+in the repo, copied by hand; services: swap image music classify ocr asr omniasr openviking searxng ollama; `swap` is
+llama-swap, which runs every LLM). The Claude Code mod `studio-services` (`/studio`) draws a pane in two sections:
+**LLMs on demand** (llama-swap's models with state and RAM, Load/Unload and Unload all: `~/studio-stack.sh
+load|unload [MODEL]`; `status --tsv` adds `llm<TAB>id<TAB>loaded|starting|unloaded<TAB>description` lines) and
+**Services** (each with Start/Stop, ComfyUI included), plus "Use Ornith" / "Use vLLM": `~/studio-stack.sh default
+ornith|vllm [MODEL]` sets Pi's default in `~/.pi/agent/settings.json`, and the mod rewrites dsh's
+`agent-default-model` in the MacBook's `~/.dsh/splash.patch.yml` (`install.sh` resets it to `ornith`). Switching
+starts no server: the first request loads the model. The engine model switch (`studio-stack.sh model`) is gone
+(2026-11-14): both vLLM and both Splash models are separate llama-swap models. `stop` frees RAM for ComfyUI
+(`127.0.0.1:8188`): it stops llama-swap (and every model it runs),
 boots out the LaunchAgent services and OpenViking, runs `searxng.sh down`, stops Colima and kills Ollama
 (the app respawns its server, so both). It refuses while image/music-server is generating (`FORCE=1`
-overrides). `start` brings them back with `LLMS` (default `ornith`), except classify, asr and omniasr: off by default since 2026-11-11 (`OFF_BY_DEFAULT`), started only by name, and stopping one also `launchctl disable`s it so it stays off after a reboot (`start <name>` re-enables it). ComfyUI starts/stops only by name
+overrides). `start` brings them back, then loads the llama-swap models named in `LLMS` (default none), except classify, asr and omniasr: off by default since 2026-11-11 (`OFF_BY_DEFAULT`), started only by name, and stopping one also `launchctl disable`s it so it stays off after a reboot (`start <name>` re-enables it). ComfyUI starts/stops only by name
 (`start|stop comfyui` runs `~/ComfyUI/run_comfyui.sh` via nohup, log `~/comfyui.log`, or `stop_comfyui.sh`;
 the pane has its button), never with stop/start all. It never touches studio-radar or sinhala-ocr. Stopped 2026-11-09 for ComfyUI: 76% memory free afterwards.
 
@@ -84,46 +78,27 @@ holds the instance secret and is git-ignored, so never commit it.
 
 ### Splash
 
-Splash serves **one model at a time**. Both of these are downloaded:
+Splash runs under llama-swap (since 2026-11-14), one process per model, on loopback ports with no key of its own.
+Both models are downloaded and can run at the same time (RAM allowing):
 
-| Model | Size on disk |
-|---|---|
-| `incoai/Qwen3.8-27B-Splash` | 16 GB, dense |
-| `incoai/Qwen3.6-35B-A3B-Splash` | 20 GB, mixture of experts |
+| Model (= llama-swap id) | Size on disk | llama-swap RAM | TTL |
+|---|---|---|---|
+| `incoai/Qwen3.8-27B-Splash` | 16 GB, dense | 18 GB | 30 min |
+| `incoai/Qwen3.6-35B-A3B-Splash` | 20 GB, mixture of experts | 22 GB | 2 h (OpenViking's model) |
 
-A request that names the model that isn't loaded gets `HTTP 404 model_not_found`.
-
-It isn't supervised by anything: it doesn't survive a reboot, and killing it
-takes the model offline for every client: the MacBook's `claude-splash` and
-`dsh-splash`, and OpenViking's summaries and memory extraction. **Ask the user
-before stopping, restarting or switching Splash's model.**
-
-Check what's loaded (no SSH needed) and how it was started:
-
-```bash
-curl -s http://__SERVER_IP__:8000/v1/models
-studio.sh run 'ps -o command= -p $(lsof -t -iTCP:8000 -sTCP:LISTEN)'
-```
-
-**`--host` matters.** Splash defaults to `127.0.0.1`, which the MacBook can't
-reach. It must run with `--host __SERVER_IP__` to be reachable over the
-tailnet (`--host __SERVER_NAME__` fails: `cannot bind __SERVER_NAME__:8000`). To start it
-or switch model (`MODEL` is one of the two above):
-
-```bash
-studio.sh run 'pkill -f "splash serve|libexec/server/server.py"; sleep 3; nohup splash serve --host __SERVER_IP__ --port 8000 --model MODEL --max-cache-disk 40G > ~/splash.log 2>&1 &'
-```
+Clients send the model id to `http://__SERVER_IP__:8100` with Sushi's key: the MacBook's `claude-splash`,
+`opencode-splash`, `pi-splash` and `dsh-splash`, and OpenViking's summaries and memory extraction. A model that is
+idle loads on the next request (~10 s; the first request waits). Unloading one cuts off a reply in progress:
+**ask before unloading a model someone is using.**
 
 Splash is 1.1.0 (`brew upgrade splash`; the tap only refreshes after `brew update`).
 `--max-cache-disk 40G` keeps evicted prompt caches on the SSD; context defaults
-to 256K. Loading takes ~10 s; check `/v1/models` until it lists the model.
-After a switch, clients that name a model must match it. dsh and OpenViking
-(`vlm.model` in `~/.openviking/ov.conf`) name 3.8-27B.
+to 256K. Loading takes ~10 s.
 
 Splash has no `/v1/embeddings` (404): it serves chat only (`/v1/chat/completions`,
 `/v1/responses`, `/v1/messages`). Use Ollama for embeddings.
 
-`~/splash.log` has one line per request, `input … cached … tools N · TTFT`,
+llama-swap's log (`~/Library/Logs/llama-swap.log`, or the web UI's logs) has Splash's one line per request, `input … cached … tools N · TTFT`,
 which is the quickest way to see why a client is slow. A cold 85K-token prompt
 takes about 2 minutes before the first output token.
 
@@ -134,8 +109,9 @@ read-only at `~/github_repos/sushi`) serves `Qwen3.8-Flash-Next-Sushi-3bpw` (80 
 `~/.sushi/models/Qwen3.8-Flash-Next-Sushi-3bpw`: 49.3 GiB weights + a 29.8 GiB n-gram table read from the SSD).
 dsh's default model since 2026-10-09 (provider `sushi` in `~/.dsh/splash.settings.yaml`).
 
-- **Start:** `nohup ~/sushi-serve.sh > ~/sushi.log 2>&1 &`. It binds `__SERVER_IP__:8084` with 4-bit KV and 256K
-  context. Like Splash it isn't supervised and doesn't survive a reboot; **ask before stopping it.**
+- **Runs under llama-swap** (since 2026-11-14) as `Qwen3.8-Flash-Next-Sushi-3bpw`, through
+  `llama-swap/sushi.sh` (the old `~/sushi-serve.sh` settings: 4-bit KV, 256K context, vision; loopback, no key of its
+  own). It claims 46 GB of llama-swap's 50 GB pool, so loading it unloads every other model.
 - **Vision:** the script passes `--vision` (image tower +0.9 GB inside the SSD budget), so the dsh entry declares
   `input: [ text, image ]`. Verified 2026-10-10: it answers questions about images (OpenAI `image_url` parts).
 - **Key:** `~/.sushi/api-key` on the Studio (passed by `--api-key-env`), copied to the MacBook's `~/.sushi-api-key`;
@@ -193,20 +169,19 @@ route the experts wrong).
 
 `Ornith-1.5-35B-A3B` (MIT; ornith-ai's self-improvement fine-tune of Qwen3.6-35B-A3B, same `qwen3_5_moe`
 architecture, ~3B active; its card claims SWE-bench Verified 79 vs 73.4 for the base). A second Splash process
-on port 8086 serves the official Q4_K_M GGUF with its vision projector and Splash's DFlash2 draft
+under llama-swap serves the official Q4_K_M GGUF with its vision projector and Splash's DFlash2 draft
 `incoai/Qwen3.6-35B-A3B-DFlash2`.
 
-- **Start:** `nohup ~/ornith-serve.sh > ~/ornith.log 2>&1 &` (`HF_HUB_OFFLINE=1`, model
-  `local/Ornith-1.5-35B-A3B-GGUF:Q4_K_M`, served name `Ornith-1.5-35B-A3B`, API key from `~/.sushi/api-key`).
-  Not supervised; **ask before stopping it.** The first start hashes the 20 GiB file once (~30 s), then loads in ~20 s.
-- **dsh:** provider `ornith` in `~/.dsh/splash.settings.yaml`, `input: [ text, image ]`.
+- **Runs under llama-swap** (since 2026-11-14) as `Ornith-1.5-35B-A3B` (`HF_HUB_OFFLINE=1`, model
+  `local/Ornith-1.5-35B-A3B-GGUF:Q4_K_M`), 24 GB of the pool, 2 h TTL. Loads in ~20 s (the first start ever hashes
+  the 20 GiB file once, ~30 s). `~/ornith-serve.sh` (old port 8086) is no longer used.
+- **dsh:** provider `ornith` in `splash.patch.yml` (base URL :8100), `input: [ text, image ]`.
 - **Pi on the Studio** (since 2026-11-09): `~/.pi/agent/models.json` has provider `ornith`
-  (`baseUrl http://__SERVER_IP__:8086/v1`, `"apiKey": "!cat ~/.sushi/api-key"` so the key isn't copied in,
+  (`baseUrl http://__SERVER_IP__:8100/v1`, `"apiKey": "!cat ~/.sushi/api-key"` so the key isn't copied in,
   text + image, 256K context, 32K output), and `~/.pi/agent/settings.json` makes it the default
   (`defaultProvider ornith`, `defaultModel Ornith-1.5-35B-A3B`). Ollama's `gemma4:e2b-mlx` is still there.
-  Backups: `*.bak-20261109`. On the Studio itself use `http://__SERVER_IP__:8086`: `127.0.0.1:8086` doesn't answer
-  (the script binds only the Tailscale IP) and `__SERVER_NAME__` doesn't resolve. If Ornith is down, Pi's default fails
-  until it is started again.
+  Backups: `*.bak-20261109`, `*.bak-20261114*`. On the Studio itself use `http://__SERVER_IP__:8100` (llama-swap binds
+  only the Tailscale IP; `__SERVER_NAME__` doesn't resolve). If llama-swap is down, Pi's default fails.
   Extensions in `~/.pi/agent/extensions/` (sources in `clients/pi/`, copied by hand, not by `install.sh`):
   `image-generate.ts` (see image-server) and `searxng-search.ts`, tool `searxng_search` (query, `max_results`
   default 8, `time_range`) against `http://127.0.0.1:8889` (`$SEARXNG_URL` overrides). The installed
@@ -235,9 +210,9 @@ on port 8086 serves the official Q4_K_M GGUF with its vision projector and Splas
 ### llama-swap (on-demand LLMs)
 
 [llama-swap](https://github.com/mostlygeek/llama-swap) (MIT; v268, pinned with its SHA-256 in `llama-swap/llama-swap.sh`;
-installed 2026-11-14) is one OpenAI/Anthropic-compatible endpoint, `http://__SERVER_IP__:8100/v1`, for the LLMs in
+installed 2026-11-14) is one OpenAI/Anthropic-compatible endpoint, `http://__SERVER_IP__:8100/v1`, for every LLM in
 `llama-swap/config.yaml`. A request's `model` starts that model's server on a loopback port; it unloads after 30 idle
-minutes (`globalTTL`) or earlier when a newly requested model needs its RAM: the capacity router gives LLMs a 40,000 MB
+minutes (`globalTTL`) or earlier when a newly requested model needs its RAM: the capacity router gives LLMs a 50,000 MB
 `ram` pool and each model its `capacities.ram`, and evicts the fewest models to make room. API key: Sushi's
 (`apiKeys`, from `STUDIO_API_KEY` set by the script); `Authorization: Bearer` and `x-api-key` both work.
 
@@ -268,7 +243,7 @@ minutes (`globalTTL`) or earlier when a newly requested model needs its RAM: the
   ocr-server and sinhala-ocr).
 - **Clients:** dsh provider `studio` (`splash.patch.yml`) and Pi on the Studio provider `studio` (`~/.pi/agent/models.json`,
   backups `models.json.bak-20261114*`): `pi --provider studio --model Qwen3.5-4B-3D-Coder`. Defaults unchanged.
-- **Not under llama-swap yet:** Splash, Ornith, vLLM and Sushi (phase 2: vLLM, Ornith, Splash; Sushi last).
+- **Also here** (since 2026-11-14, see their sections): both Splash models, Ornith, both vLLM models and Sushi.
 
 ### vLLM (vllm-metal, multi-user test)
 
@@ -277,17 +252,14 @@ private Python env, `vllm` on PATH; installed 2026-11-09). It serves **MLX model
 (`qwen35moe`) and Splash's own `.bin` layer format can't load. Model: `mlx-community/Qwen3.6-35B-A3B-4bit` (19 GB,
 in the HF cache; Ornith's base model, no clean MLX build of Ornith exists).
 
-- **Start:** `nohup ~/vllm-serve.sh > ~/vllm.log 2>&1 &` (source `vllm/vllm-serve.sh` in the repo). Binds
-  `__SERVER_IP__:8088`, served name `Qwen3.6-35B-A3B`, Sushi's API key, `--gpu-memory-utilization ${VLLM_MEM:-0.5}`,
-  128K context (`VLLM_CTX`, was 64K), prefix caching, reasoning parser `qwen3`, tool parser `qwen3_coder`. Ready in ~20 s.
-  Not supervised; **ask before stopping it.** It reserves its budget up front: 28 GB footprint at 0.5
-  (KV cache 277K–292K tokens: ~2 users at full 128K context, ~4 at 64K).
-- **Other model:** `VLLM_MODEL=<repo> VLLM_NAME=<served name>` (same port, one model at a time). Downloaded 2026-11-10:
+- **Runs under llama-swap** (since 2026-11-14): `Qwen3.6-35B-A3B` and `Qwen3.5-9B-heretic` are separate models there
+  (`vllm serve <repo> ${vllm_args}`; the model must come first: `--gpu-memory-utilization 0.5`, 128K context, prefix caching, reasoning parser `qwen3`, tool
+  parser `qwen3_coder`). Each reserves its budget up front (28 GB footprint at 0.5, KV cache 277K–292K tokens;
+  llama-swap counts 33 GB), so only one runs at a time. The old `vllm/vllm-serve.sh` (port 8088) is gone from the repo; `~/vllm-serve.sh` on the Studio is unused.
+- **Second model**, downloaded 2026-11-10:
   `xtools-at/DeepSeek-V4-Pro-Qwen3.5-9B-UNCENSORED-heretic` (Apache-2.0, BF16 safetensors, 18 GB; vllm-metal loads plain HF
   safetensors too, not only MLX), served as `Qwen3.5-9B-heretic`. Reasoning, tool calls verified; ~25 tok/s single user.
-  Pi's default since 2026-11-11 (`vllm` / `Qwen3.5-9B-heretic`, text only), and `vllm-serve.sh`'s default model since then too
-  (Qwen3.6 now needs `VLLM_MODEL=mlx-community/Qwen3.6-35B-A3B-4bit VLLM_NAME=Qwen3.6-35B-A3B`). `studio-stack.sh default vllm`
-  names whatever vLLM serves (Qwen3.6 if it is down).
+  Pi's default since 2026-11-11 (`vllm` / `Qwen3.5-9B-heretic`, text only); `studio-stack.sh default vllm [MODEL]`.
 - **Load test:** `~/vllm/loadtest.py --url … --model … --users 1,2,4,8` (source `vllm/loadtest.py`, stdlib only;
   key from `$OPENAI_API_KEY`). Results in `~/vllm/*.txt`. Measured 2026-11-09, 256 max tokens, thinking on:
 
@@ -302,13 +274,12 @@ in the HF cache; Ornith's base model, no clean MLX build of Ornith exists).
   Splash is faster up to ~4 users (DFlash2 speculation) and starts queueing past that; vLLM keeps TTFT under
   0.5 s and total throughput rising to 32 users.
 - **Clients:** provider `vllm` (model `Qwen3.6-35B-A3B`, text + image, 128K context, 16K max output) in dsh's
-  `splash.patch.yml` and in Pi's `~/.pi/agent/models.json` on the Studio (base URL `http://__SERVER_IP__:8088/v1`;
-  `127.0.0.1` doesn't answer there). Defaults stay `ornith`: pick vLLM in the model picker, or
+  `splash.patch.yml` and in Pi's `~/.pi/agent/models.json` on the Studio (base URL `http://__SERVER_IP__:8100/v1`). Defaults stay `ornith`: pick vLLM in the model picker, or
   `pi --provider vllm --model Qwen3.6-35B-A3B`. Tool calls, images and thinking (`message.reasoning`) verified 2026-11-09.
-- **claude-vllm** (MacBook, in `claude-splash.zsh`): Claude Code on vLLM's Anthropic `/v1/messages` (bearer auth with
-  Sushi's key; `x-api-key` gets 401). Same Qwen3.6 profile as claude-splash; the proxy runs in `vllm` mode and sends
-  `chat_template_kwargs.preserve_thinking` instead of `context_management`. Context limit = vLLM's `max_model_len`
-  from `/v1/models` (128K).
+- **claude-vllm** (MacBook, in `claude-splash.zsh`): Claude Code on vLLM's Anthropic `/v1/messages` through llama-swap
+  (bearer auth with Sushi's key), model `Qwen3.6-35B-A3B` (`CLAUDE_VLLM_MODEL` overrides). Same Qwen3.6 profile as
+  claude-splash; the proxy runs in `vllm` mode and sends `chat_template_kwargs.preserve_thinking` instead of
+  `context_management`. Context limit 128K.
   Headless Bash tool round trip: 13 s (2026-11-09).
 - **PyPI over IPv6 crawls on the Studio** (~90 KB/s vs ~3.6 MB/s over IPv4 to files.pythonhosted.org; HF downloads
   too). For a big pip/brew Python install: `networksetup -setv6off Wi-Fi` (no sudo needed), then
@@ -322,13 +293,13 @@ Shell functions in `~/.claude/splash/claude-splash.zsh`, sourced from
 them. All three take the same leading arguments:
 
 ```bash
-claude-splash [args]                  # uses whatever Splash has loaded
-claude-splash 3.6|3.8 [args]          # refuses if a different model is loaded
-claude-splash --switch 3.6|3.8 [args] # asks, restarts Splash with it, waits, launches
+claude-splash [args]                  # Qwen3.8-27B Splash
+claude-splash 3.6|3.8 [args]          # pick the Splash model; llama-swap loads it if idle
+claude-splash --switch 3.6|3.8 [args] # same (kept for old habits; nothing restarts)
 ```
 
-- **Models:** it reads `/v1/models` and points every model setting (main,
-  Opus/Sonnet/Haiku defaults, subagents) at the loaded model, through a
+- **Models:** it talks to llama-swap (`:8100`, Sushi's key from `~/.sushi-api-key`) and points every model
+  setting (main, Opus/Sonnet/Haiku defaults, subagents) at the picked model, through a
   per-run copy of `~/.claude/splash-settings.json`. That file also sets
   `CLAUDE_CODE_MAX_CONTEXT_TOKENS=131072`.
 - **No MCP:** it launches with `--strict-mcp-config` and
@@ -430,10 +401,10 @@ logs to `~/Library/Logs/openviking.log`. It uses ~450 MB of RAM.
   vectors are kept in `~/.openviking/data/vectordb.qwen3-1024.bak`). It goes
   through the `openai` provider at `http://127.0.0.1:11434/v1`, with
   `encoding_format: float`.
-- **LLM:** Splash, `incoai/Qwen3.8-27B-Splash`, with
-  `extra_request_body: {"reasoning_effort": "none"}` and a 900 s timeout.
-  Summaries and memory extraction queue behind chat turns. They 404 while
-  another Splash model is loaded.
+- **LLM:** Splash `incoai/Qwen3.6-35B-A3B-Splash` through llama-swap
+  (`api_base http://__SERVER_IP__:8100/v1`, Sushi's key; since 2026-11-14), with
+  `extra_request_body: {"reasoning_effort": "none"}` and a 900 s timeout. The model loads on demand (2 h TTL).
+  Backup of the old config: `ov.conf.bak-20261114`.
 - **Changing the embedding model name** fails at startup with
   `EmbeddingRebuildRequiredError`. If the vectors are identical, start once
   with `embedding.allow_metadata_override=true`, then remove it. A new model

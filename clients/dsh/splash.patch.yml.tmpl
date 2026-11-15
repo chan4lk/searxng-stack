@@ -16,9 +16,9 @@
       splash:
         displayName: Splash
         api: openai-completions
-        baseURL: http://__SERVER_IP__:8000/v1
-        # Server takes no auth; dsh-splash exports a placeholder value.
-        apiKeyEnv: SPLASH_API_KEY
+        # Through llama-swap (:8100), which starts the requested model; Sushi's key.
+        baseURL: http://__SERVER_IP__:8100/v1
+        apiKeyEnv: SUSHI_API_KEY
         # Measured ~120 tok/s output; generous idle window for long reasoning.
         streamIdleTimeoutMs: 300000
         defaultContextWindow: 131072
@@ -35,9 +35,7 @@
             contextWindow: 131072
             maxTokens: 16384
             # Always emits reasoning_content; no selectable effort levels.
-            # Splash serves ONE model at a time: the unloaded one answers
-            # HTTP 404 model_not_found. Switch by restarting `splash serve --model`
-            # on the Studio, then pick the matching model here.
+            # llama-swap starts whichever Splash model is picked (both can run at once).
           - id: incoai/Qwen3.6-35B-A3B-Splash
             name: Qwen3.6 35B-A3B Splash (MoE)
             # Verified: answers questions about images (OpenAI image_url parts).
@@ -48,13 +46,12 @@
             # Also emits reasoning_content, and reasons at length: keep maxTokens
             # generous or replies can end mid-thought (finish_reason: length).
 
-      # sushi on the Studio (Qwen3.8-Flash-Next-Sushi-3bpw, 4-bit KV, 256K context),
-      # started by ~/sushi-serve.sh there. Requires its API key: dsh-splash exports
-      # SUSHI_API_KEY from ~/.sushi-api-key.
+      # sushi on the Studio (Qwen3.8-Flash-Next-Sushi-3bpw, 4-bit KV, 256K context), through llama-swap
+      # (llama-swap/sushi.sh); loading it unloads the other models. dsh-splash exports SUSHI_API_KEY.
       sushi:
         displayName: Sushi
         api: openai-completions
-        baseURL: http://__SERVER_IP__:8084/v1
+        baseURL: http://__SERVER_IP__:8100/v1
         apiKeyEnv: SUSHI_API_KEY
         streamIdleTimeoutMs: 300000
         defaultContextWindow: 262144
@@ -65,7 +62,7 @@
         models:
           - id: Qwen3.8-Flash-Next-Sushi-3bpw
             name: Qwen3.8 Flash-Next Sushi 3bpw
-            # Reads images: ~/sushi-serve.sh passes --vision (tower +0.9 GB in the SSD budget).
+            # Reads images: sushi.sh passes --vision (tower +0.9 GB in the SSD budget).
             # Verified 2026-10-10: answers questions about images (OpenAI image_url parts).
             input: [ text, image ]
             contextWindow: 262144
@@ -109,12 +106,12 @@
             contextWindow: 131072
             maxTokens: 32768
 
-      # Ornith-1.5-35B-A3B (MIT; Qwen3.6-35B-A3B fine-tune for coding and agents) served by Splash on the
-      # Studio (~/ornith-serve.sh there; official GGUF Q4_K_M + mmproj). Same key as Sushi.
+      # Ornith-1.5-35B-A3B (MIT; Qwen3.6-35B-A3B fine-tune for coding and agents) served by Splash under
+      # llama-swap on the Studio (patched official GGUF Q4_K_M + mmproj, DFlash2 draft). Same key as Sushi.
       ornith:
         displayName: Ornith
         api: openai-completions
-        baseURL: http://__SERVER_IP__:8086/v1
+        baseURL: http://__SERVER_IP__:8100/v1
         apiKeyEnv: SUSHI_API_KEY
         streamIdleTimeoutMs: 300000
         defaultContextWindow: 262144
@@ -129,12 +126,12 @@
             contextWindow: 262144
             maxTokens: 32000
 
-      # vLLM (vllm-metal) on the Studio: Qwen3.5-9B heretic (default) or Qwen3.6-35B-A3B, one at a time; continuous batching for many
-      # users (~/vllm-serve.sh there). Context is VLLM_CTX (128K). Same key as Sushi.
+      # vLLM (vllm-metal) under llama-swap on the Studio: Qwen3.5-9B heretic or Qwen3.6-35B-A3B (each reserves ~33 GB, so
+      # one at a time); continuous batching for many users. 128K context. Same key as Sushi.
       vllm:
         displayName: vLLM
         api: openai-completions
-        baseURL: http://__SERVER_IP__:8088/v1
+        baseURL: http://__SERVER_IP__:8100/v1
         apiKeyEnv: SUSHI_API_KEY
         streamIdleTimeoutMs: 300000
         defaultContextWindow: 131072
@@ -148,7 +145,6 @@
             input: [ text ]
             contextWindow: 131072
             maxTokens: 16384
-          # only the one vLLM serves answers (studio-stack.sh model vllm; the Studio pane's model switch)
           - id: Qwen3.6-35B-A3B
             name: Qwen3.6 35B-A3B (vLLM)
             input: [ text, image ]

@@ -338,7 +338,13 @@ claude-splash --switch 3.6|3.8 [args] # same (kept for old habits; nothing resta
   normal opencode. The user's normal config loads oh-my-openagent (Sisyphus),
   which sent 80K tokens and 46 tools with no cross-session cache (~104 s first
   token), and its `small_model` points at an offline MacBook server. The lean
-  config sends ~10K tokens and 8 tools, ~6 s per reply. In scripts, give
+  config sends ~10K tokens and 8 tools, ~6 s per reply. Both OpenCode configs (lean and
+  normal `~/.config/opencode/opencode.json`) also have provider `studio` (2026-11-19): every llama-swap
+  model, key read with `{file:~/.sushi-api-key}`. The normal config's old `splash` provider (port 8000) was
+  removed. **OpenCode 2.x** (2.3.2): the TUI has no `-m` (only `opencode run -m` does), and the TUI talks to a
+  shared background service that ignores `XDG_CONFIG_HOME`. Pick a model with
+  `OPENCODE_CONFIG_CONTENT='{"model":"studio/Ornith-1.5-35B-A3B"}' opencode --standalone` (private server) or
+  the model picker; `opencode-splash` does this. In scripts, give
   `opencode run` `</dev/null`, or it waits on stdin.
 - **pi-splash** runs Pi with the `splash` provider in `~/.pi/agent/models.json`:
   4 tools, ~14K tokens.

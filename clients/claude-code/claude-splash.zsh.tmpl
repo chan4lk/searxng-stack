@@ -136,7 +136,10 @@ EOF
 # Sessions and auth stay shared with normal opencode (~/.local/share/opencode).
 opencode-splash() {
   _splash_pick opencode-splash "$@" || return; shift $_SPLASH_SHIFT
-  XDG_CONFIG_HOME=$HOME/.config/opencode-splash opencode -m "splash/$REPLY" "$@"
+  # OpenCode 2.x: the TUI has no -m, and the shared background service ignores
+  # XDG_CONFIG_HOME, so pick the model inline and run a private server.
+  XDG_CONFIG_HOME=$HOME/.config/opencode-splash \
+    OPENCODE_CONFIG_CONTENT="{\"model\":\"splash/$REPLY\"}" opencode --standalone "$@"
 }
 
 # Pi on Splash (provider "splash" in ~/.pi/agent/models.json): 4 tools, ~14K prompt.

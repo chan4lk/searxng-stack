@@ -79,6 +79,21 @@ claude-vllm() {
   _claude_local claude-vllm $_STUDIO_URL "$model" "$(_studio_key)" 131072 vllm "$@"
 }
 
+# Claude Code on a vLLM server elsewhere on the tailnet (e.g. a DGX Spark), through vLLM's own
+# Anthropic /v1/messages endpoint. CLAUDE_SPARK_URL=http://<ip>:<port> (set in ~/.zshrc);
+# CLAUDE_SPARK_MODEL picks the served model name (default ornith). vLLM serves one model at a
+# time with no key; context 128K (its --max-model-len).
+claude-spark() {
+  local url=${CLAUDE_SPARK_URL:-} model=${CLAUDE_SPARK_MODEL:-ornith} served
+  [[ -n $url ]] || { print "claude-spark: set CLAUDE_SPARK_URL=http://<spark-ip>:8001" >&2; return 1; }
+  served=$(curl -s -m 5 -f $url/v1/models) || {
+    print "claude-spark: vLLM isn't answering at $url" >&2; return 1; }
+  [[ $served == *\"id\":\"$model\"* ]] || {
+    print "claude-spark: $url isn't serving '$model' (on the Spark: ~/vllm-moe.sh $model)" >&2; return 1; }
+  print -u2 "claude-spark: $model at $url"
+  _claude_local claude-spark $url "$model" spark-local 131072 vllm "$@"
+}
+
 # _claude_local NAME URL MODEL TOKEN CONTEXT PROXY_MODE ARGS... — run Claude Code against a
 # local Anthropic-API server with every model setting pointed at MODEL.
 _claude_local() {

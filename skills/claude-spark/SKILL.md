@@ -42,7 +42,7 @@ Overrides: `SPARK_URL` (another address, e.g. if the Spark's Wi-Fi address chang
 
 | Message | Cause and fix |
 |---|---|
-| `no answer from http://192.168.1.11:8001` | You are not on the office Wi-Fi, or vLLM on the Spark is stopped (it does not start at boot). Ask the Spark's owner to start it. |
+| `no answer from http://192.168.1.11:8001` | You are not on the office Wi-Fi, or vLLM on the Spark is stopped. It starts at boot and takes ~2 minutes to be ready; if it stays down, ask the Spark's owner. |
 | `is up but not serving 'ornith'` | The Spark runs another model right now (the message lists it). Use `SPARK_MODEL=<that name>` or ask the owner. |
 | First reply slow | Normal for a long prompt: the server processes it once, then caches it. |
 
